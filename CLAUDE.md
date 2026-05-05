@@ -57,6 +57,9 @@ const roles = JSON.parse(request.headers.get("x-user-roles") || "[]")
 - Scoring: `src/lib/scoring.ts`
 - Middleware: `src/middleware.ts`
 
+## API Contract
+@../docs/api-contract.md
+
 ## Business rules quan trọng
 - CCP → điểm nhóm tiêu chí liên quan = 0
 - RISK → toàn bài = 0
