@@ -1,0 +1,403 @@
+// QualityOps — Prisma Schema
+// Provider: SQLite (dev) | PostgreSQL/Supabase (prod — enums enabled)
+// SQLite note: enums not supported → String + app-level validation
+// Convention: @@map snake_case, explicit @relation, cascade on FK
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// 1. ORGANIZATION
+// =============================================================================
+
+model Brand {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  stores    Store[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("brands")
+}
+
+model Store {
+  id          String  @id @default(cuid())
+  code        String  @unique
+  name        String
+  // "standard" | "cloud_kitchen"
+  modelType   String  @default("standard")
+  brandId     String
+  brand       Brand   @relation(fields: [brandId], references: [id])
+  region      String?
+  province    String?
+  district    String?
+  ward        String?
+  address     String?
+  // Direct AM assignment — no Area model (Bug #2 fix)
+  amId        String?
+  am          User?   @relation("StoreAM", fields: [amId], references: [id])
+  managerId   String?
+  manager     User?   @relation("StoreManager", fields: [managerId], references: [id])
+  isActive    Boolean @default(true)
+
+  assignments AuditAssignment[]
+  audits      Audit[]
+  actionPlans ActionPlan[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([brandId])
+  @@index([amId])
+  @@index([managerId])
+  @@index([isActive])
+  @@map("stores")
+}
+
+// =============================================================================
+// 2. USER & RBAC (multi-role)
+// =============================================================================
+
+model User {
+  id       String  @id @default(cuid())
+  email    String  @unique
+  fullName String
+  phone    String?
+  password String
+  isActive Boolean @default(true)
+
+  roleAssignments    RoleAssignment[]
+  storesAsAM         Store[]           @relation("StoreAM")
+  storesAsManager    Store[]           @relation("StoreManager")
+  auditAssignments   AuditAssignment[] @relation("AssignmentAuditor")
+  closedActionPlans  ActionPlan[]      @relation("ActionPlanCloser")
+  notifications      Notification[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([isActive])
+  @@map("users")
+}
+
+model RoleAssignment {
+  id      String @id @default(cuid())
+  userId  String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // "company_admin"|"qa_manager"|"qc_auditor"|"am"|"store_manager"|"executive_viewer"
+  roleKey String
+  storeId String?  // scope for SM/AM
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, roleKey])
+  @@index([userId])
+  @@index([roleKey])
+  @@map("role_assignments")
+}
+
+// =============================================================================
+// 3. CRITERIA LIBRARY
+// =============================================================================
+
+model CriteriaGroup {
+  id    String @id @default(cuid())
+  code  String @unique  // "A", "B", "C", "D"
+  name  String
+  // 0.0–1.0 | all groups sum = 1.0 (validated at service layer)
+  weight Float
+  color String?
+
+  criteria ChecklistSection[]
+  items    Criteria[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("criteria_groups")
+}
+
+model Criteria {
+  id                String        @id @default(cuid())
+  code              String        @unique
+  groupId           String
+  group             CriteriaGroup @relation(fields: [groupId], references: [id])
+  content           String
+  deductionPerError Float         @default(1.0)
+  maxDeduction      Float         @default(5.0)
+  // "none" | "critical" (group→0) | "risk" (audit→0)
+  flag              String        @default("none")
+  isActive          Boolean       @default(true)
+
+  sectionItems ChecklistSectionItem[]
+  violations   Violation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([groupId])
+  @@index([flag])
+  @@index([isActive])
+  @@map("criteria")
+}
+
+// =============================================================================
+// 4. CHECKLIST FORMS
+// =============================================================================
+
+model ChecklistForm {
+  id      String @id @default(cuid())
+  name    String
+  version String
+  // "draft" | "published" | "archived"
+  status  String @default("draft")
+
+  sections   ChecklistSection[]
+  auditPlans AuditPlan[]
+  audits     Audit[]
+
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status])
+  @@map("checklist_forms")
+}
+
+model ChecklistSection {
+  id      String        @id @default(cuid())
+  formId  String
+  form    ChecklistForm @relation(fields: [formId], references: [id], onDelete: Cascade)
+  groupId String
+  group   CriteriaGroup @relation(fields: [groupId], references: [id])
+  name    String
+  order   Int           @default(0)
+
+  items ChecklistSectionItem[]
+
+  createdAt DateTime @default(now())
+
+  @@index([formId])
+  @@index([groupId])
+  @@map("checklist_sections")
+}
+
+model ChecklistSectionItem {
+  id         String           @id @default(cuid())
+  sectionId  String
+  section    ChecklistSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  criteriaId String
+  criteria   Criteria         @relation(fields: [criteriaId], references: [id])
+  order      Int              @default(0)
+
+  @@unique([sectionId, criteriaId])
+  @@index([sectionId])
+  @@index([criteriaId])
+  @@map("checklist_section_items")
+}
+
+// =============================================================================
+// 5. AUDIT PLANNING
+// =============================================================================
+
+model AuditPlan {
+  id     String @id @default(cuid())
+  name   String
+  // always "adhoc" — no periodic (Bug #5 fix)
+  type   String @default("adhoc")
+  // always "company" — no brand-scoped (Bug #4 fix)
+  scope  String @default("company")
+  formId String
+  form   ChecklistForm @relation(fields: [formId], references: [id])
+  // "open" | "closed"
+  status String @default("open")
+
+  assignments AuditAssignment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([formId])
+  @@map("audit_plans")
+}
+
+model AuditAssignment {
+  id            String    @id @default(cuid())
+  planId        String
+  plan          AuditPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  storeId       String
+  store         Store     @relation(fields: [storeId], references: [id])
+  auditorId     String
+  auditor       User      @relation("AssignmentAuditor", fields: [auditorId], references: [id])
+  scheduledDate DateTime
+  // "pending" | "in_progress" | "completed"
+  status        String    @default("pending")
+  // filled after QC submits audit
+  auditId       String?   @unique
+  audit         Audit?    @relation(fields: [auditId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([planId, storeId])
+  @@index([planId])
+  @@index([storeId])
+  @@index([auditorId])
+  @@index([status])
+  @@map("audit_assignments")
+}
+
+// =============================================================================
+// 6. AUDIT EXECUTION
+// =============================================================================
+
+model Audit {
+  id              String  @id @default(cuid())
+  formId          String
+  form            ChecklistForm @relation(fields: [formId], references: [id])
+  storeId         String
+  store           Store         @relation(fields: [storeId], references: [id])
+  // denormalized for query perf (avoid extra join)
+  auditorId       String
+  finalScore      Float   @default(100.0)
+  // "excellent"|"good"|"pass"|"fail"|"alarm"
+  grade           String  @default("excellent")
+  isRiskTriggered Boolean @default(false)
+
+  assignment  AuditAssignment?
+  groupScores GroupScore[]
+  violations  Violation[]
+  actionPlan  ActionPlan?
+
+  submittedAt DateTime?
+  editedAt    DateTime?
+  editNote    String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([storeId])
+  @@index([auditorId])
+  @@index([grade])
+  @@index([submittedAt])
+  @@map("audits")
+}
+
+// Stores per-group scoring for full audit trail
+model GroupScore {
+  id                String  @id @default(cuid())
+  auditId           String
+  audit             Audit   @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  groupId           String
+  groupCode         String
+  weight            Float
+  maxScore          Float
+  reachedScore      Float
+  percentage        Float
+  triggeredCritical Boolean @default(false)
+
+  @@unique([auditId, groupId])
+  @@index([auditId])
+  @@map("group_scores")
+}
+
+model Violation {
+  id                  String    @id @default(cuid())
+  auditId             String
+  audit               Audit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  criteriaId          String
+  criteria            Criteria  @relation(fields: [criteriaId], references: [id])
+  numErrors           Int       @default(0)
+  // 1→2→3 multiplier; 4th → isCriticalTriggered (Bug #7: numErrors preserved)
+  repeatCount         Int       @default(1)
+  isCriticalTriggered Boolean   @default(false)
+  isRiskTriggered     Boolean   @default(false)
+  note                String?
+
+  evidences Evidence[]
+
+  createdAt DateTime @default(now())
+
+  @@index([auditId])
+  @@index([criteriaId])
+  @@map("violations")
+}
+
+model Evidence {
+  id       String @id @default(cuid())
+  url      String
+  fileName String?
+  mimeType String?
+
+  violationId  String?
+  violation    Violation?  @relation(fields: [violationId], references: [id], onDelete: SetNull)
+  actionPlanId String?
+  actionPlan   ActionPlan? @relation(fields: [actionPlanId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([violationId])
+  @@index([actionPlanId])
+  @@map("evidences")
+}
+
+// =============================================================================
+// 7. ACTION PLAN
+// =============================================================================
+
+model ActionPlan {
+  id      String @id @default(cuid())
+  auditId String @unique
+  audit   Audit  @relation(fields: [auditId], references: [id])
+  storeId String
+  store   Store  @relation(fields: [storeId], references: [id])
+  // "draft"|"submitted"|"in_progress"|"closed"
+  status      String    @default("draft")
+  remediation String?
+  deadline    DateTime?
+  evidences   Evidence[]
+
+  // QAM who closed — only QAM can close (FR-AP)
+  closedById String?
+  closedBy   User?     @relation("ActionPlanCloser", fields: [closedById], references: [id])
+  closedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([storeId])
+  @@index([status])
+  @@index([deadline])
+  @@map("action_plans")
+}
+
+// =============================================================================
+// 8. NOTIFICATIONS
+// =============================================================================
+
+model Notification {
+  id      String  @id @default(cuid())
+  userId  String
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title   String
+  message String
+  // "info" | "warning" | "alarm"
+  type    String  @default("info")
+  isRead  Boolean @default(false)
+  link    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
