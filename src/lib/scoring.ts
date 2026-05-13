@@ -3,6 +3,7 @@ export type CriteriaInput = {
   groupId: string;
   groupCode: string;
   maxScore: number;
+  maxDeduction?: number;
   deductionPerError: number;
   numErrors: number;
   repeatCount: number; // 1, 2, 3...
@@ -43,8 +44,8 @@ export function calculateAuditScore(
       groupId: gw.groupId,
       groupCode: gw.groupCode,
       weight: gw.weight,
-      reachedScore: 0,
-      maxScore: 0,
+      reachedScore: 100,
+      maxScore: 100,
       percentage: 0,
       triggeredCritical: false,
     };
@@ -52,36 +53,39 @@ export function calculateAuditScore(
 
   let isRiskTriggered = false;
 
-  // 1. Calculate base points for each item & check for RISK/Critical
+  // 1. Tru diem theo loi va kiem tra RISK/Critical.
   items.forEach((item) => {
     const group = groups[item.groupId];
     if (!group) return;
 
-    group.maxScore += item.maxScore;
+    if (item.numErrors <= 0) return;
 
-    // Check RISK (One strike out for the whole audit)
-    if (item.flag === "risk" && item.numErrors > 0) {
+    // RISK lam toan bai ve 0.
+    if (item.flag === "risk") {
       isRiskTriggered = true;
     }
 
-    // Check Critical (One strike out for the group)
-    if (item.flag === "critical" && item.numErrors > 0) {
+    // Critical lam group lien quan ve 0.
+    if (item.flag === "critical") {
       group.triggeredCritical = true;
     }
     
-    if (item.repeatCount >= 4 && item.numErrors > 0) {
+    if (item.repeatCount >= 4) {
       group.triggeredCritical = true;
     }
 
-    // Calculate deduction with repeat multiplier
+    // Tinh diem tru voi repeat multiplier.
     const multiplier = Math.min(item.repeatCount, 3);
-    const totalDeduction = item.numErrors * item.deductionPerError * multiplier;
+    const uncappedDeduction = item.numErrors * item.deductionPerError * multiplier;
+    const totalDeduction = Math.min(
+      uncappedDeduction,
+      item.maxDeduction ?? item.maxScore
+    );
     
-    const itemReached = Math.max(0, item.maxScore - totalDeduction);
-    group.reachedScore += itemReached;
+    group.reachedScore = Math.max(0, group.reachedScore - totalDeduction);
   });
 
-  // 2. Finalize Group Scores
+  // 2. Chot diem tung group.
   let weightedTotal = 0;
 
   Object.values(groups).forEach((g) => {
@@ -90,7 +94,7 @@ export function calculateAuditScore(
     } else if (g.maxScore > 0) {
       g.percentage = (g.reachedScore / g.maxScore) * 100;
     } else {
-      g.percentage = 100; // No items in group = full points
+      g.percentage = 100; // Group khong co item thi tinh du diem.
     }
 
     const weight = groupWeights.find((w) => w.groupId === g.groupId)?.weight || 0;
