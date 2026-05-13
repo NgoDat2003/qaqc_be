@@ -1,10 +1,11 @@
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import { fakerVI as faker } from '@faker-js/faker'
 
 const prisma = new PrismaClient()
 
 async function main() {
-  console.log('Start seeding...')
+  console.log('Start seeding 1000+ realistic fake data...')
 
   // Clean existing data
   await prisma.evidence.deleteMany()
@@ -27,81 +28,224 @@ async function main() {
   await prisma.brand.deleteMany()
   await prisma.user.deleteMany()
 
-  // 1. CriteriaGroups: A(30%), B(15%), C(15%), D(40%)
-  const groupA = await prisma.criteriaGroup.create({ data: { code: 'A', name: 'ATVSTP', weight: 0.30, color: '#ef4444' } })
-  const groupB = await prisma.criteriaGroup.create({ data: { code: 'B', name: 'Dịch vụ', weight: 0.15, color: '#3b82f6' } })
-  const groupC = await prisma.criteriaGroup.create({ data: { code: 'C', name: 'Chất lượng', weight: 0.15, color: '#10b981' } })
-  const groupD = await prisma.criteriaGroup.create({ data: { code: 'D', name: 'Vận hành', weight: 0.40, color: '#f59e0b' } })
-
-  // Criteria
-  const criteria1 = await prisma.criteria.create({ data: { code: 'A.1', groupId: groupA.id, content: 'Sàn nhà sạch sẽ', deductionPerError: 1, maxDeduction: 5, flag: 'none' } })
-  const criteria2 = await prisma.criteria.create({ data: { code: 'A.2', groupId: groupA.id, content: 'Có côn trùng (Critical)', deductionPerError: 5, maxDeduction: 5, flag: 'critical' } })
-  const criteria3 = await prisma.criteria.create({ data: { code: 'B.1', groupId: groupB.id, content: 'Nhân viên chào khách', deductionPerError: 1, maxDeduction: 5, flag: 'none' } })
-  const criteria4 = await prisma.criteria.create({ data: { code: 'C.1', groupId: groupC.id, content: 'Sai định lượng', deductionPerError: 2, maxDeduction: 5, flag: 'none' } })
-  const criteria5 = await prisma.criteria.create({ data: { code: 'D.1', groupId: groupD.id, content: 'Bảo quản nguyên liệu sai (Risk)', deductionPerError: 5, maxDeduction: 5, flag: 'risk' } })
-
-  // 2. Brands: "Alpha Brand", "Beta Brand"
-  const alphaBrand = await prisma.brand.create({ data: { code: 'ALPHA', name: 'Alpha Brand' } })
-  const betaBrand = await prisma.brand.create({ data: { code: 'BETA', name: 'Beta Brand' } })
-
-  // 3. User accounts (6 users)
   const hashedPassword = await bcrypt.hash('Test@1234', 10)
 
-  const ca = await prisma.user.create({ data: { email: 'ca@qualityops.com', fullName: 'Company Admin', password: hashedPassword } })
-  await prisma.roleAssignment.create({ data: { userId: ca.id, roleKey: 'company_admin' } })
-
-  const qam = await prisma.user.create({ data: { email: 'qam@qualityops.com', fullName: 'QA Manager', password: hashedPassword } })
-  await prisma.roleAssignment.create({ data: { userId: qam.id, roleKey: 'qa_manager' } })
-
-  const qc = await prisma.user.create({ data: { email: 'qc@qualityops.com', fullName: 'QC Auditor', password: hashedPassword } })
-  await prisma.roleAssignment.create({ data: { userId: qc.id, roleKey: 'qc_auditor' } })
-
-  const am = await prisma.user.create({ data: { email: 'am@qualityops.com', fullName: 'Area Manager', password: hashedPassword } })
-  await prisma.roleAssignment.create({ data: { userId: am.id, roleKey: 'am' } })
-
-  const sm = await prisma.user.create({ data: { email: 'sm@qualityops.com', fullName: 'Store Manager', password: hashedPassword } })
-  await prisma.roleAssignment.create({ data: { userId: sm.id, roleKey: 'store_manager' } })
-
-  const ev = await prisma.user.create({ data: { email: 'ev@qualityops.com', fullName: 'Executive Viewer', password: hashedPassword } })
-  await prisma.roleAssignment.create({ data: { userId: ev.id, roleKey: 'executive_viewer' } })
-
-  // 4. Stores: 5 Stores (mix standard + cloud_kitchen)
-  const store1 = await prisma.store.create({ data: { code: 'ST001', name: 'Alpha Store 1', modelType: 'standard', brandId: alphaBrand.id, amId: am.id, managerId: sm.id } })
-  const store2 = await prisma.store.create({ data: { code: 'ST002', name: 'Alpha Store 2', modelType: 'standard', brandId: alphaBrand.id, amId: am.id } })
-  const store3 = await prisma.store.create({ data: { code: 'ST003', name: 'Beta Store 1', modelType: 'standard', brandId: betaBrand.id, amId: am.id } })
-  const store4 = await prisma.store.create({ data: { code: 'CK001', name: 'Cloud Kitchen 1 (Alpha)', modelType: 'cloud_kitchen', brandId: alphaBrand.id, amId: am.id } })
-  const store5 = await prisma.store.create({ data: { code: 'CK002', name: 'Cloud Kitchen 2 (Beta)', modelType: 'cloud_kitchen', brandId: betaBrand.id, amId: am.id } })
-
-  // Link storeManager to store1
-  await prisma.roleAssignment.update({
-    where: { userId_roleKey: { userId: sm.id, roleKey: 'store_manager' } },
-    data: { storeId: store1.id }
-  })
-
-  // 5. ChecklistForm: 1 published ChecklistForm with sections
-  const checklist = await prisma.checklistForm.create({
-    data: {
-      name: 'Standard Audit Checklist v1',
-      version: '1.0.0',
-      status: 'published',
-      publishedAt: new Date()
+  // ==========================================
+  // 1. GENERATE USERS & ROLES
+  // ==========================================
+  console.log('Generating Users...')
+  const createUser = async (roleKey: string, count: number) => {
+    const users = []
+    for (let i = 0; i < count; i++) {
+      const user = await prisma.user.create({
+        data: {
+          email: faker.internet.email().toLowerCase(),
+          fullName: faker.person.fullName(),
+          phone: faker.phone.number({ style: 'national' }),
+          password: hashedPassword,
+        }
+      })
+      await prisma.roleAssignment.create({
+        data: { userId: user.id, roleKey }
+      })
+      users.push(user)
     }
+    return users
+  }
+
+  // Create fixed admin for easy login
+  const admin = await prisma.user.create({
+    data: { email: 'admin@qualityops.com', fullName: 'Super Admin', password: hashedPassword }
+  })
+  await prisma.roleAssignment.create({ data: { userId: admin.id, roleKey: 'company_admin' } })
+
+  const qamUsers = await createUser('qa_manager', 5)
+  const qcUsers = await createUser('qc_auditor', 20)
+  const amUsers = await createUser('am', 30)
+  const smUsers = await createUser('store_manager', 150)
+
+  // ==========================================
+  // 2. GENERATE BRANDS & STORES
+  // ==========================================
+  console.log('Generating Brands & Stores...')
+  const brandNames = ['Nova Coffee', 'Zenith Tea', 'Urban Bistro', 'Green Plate']
+  const brands = []
+  for (let i = 0; i < brandNames.length; i++) {
+    const brand = await prisma.brand.create({
+      data: { code: `BR${i + 1}`, name: brandNames[i] }
+    })
+    brands.push(brand)
+  }
+
+  const stores = []
+  let smIndex = 0
+  for (let i = 0; i < 150; i++) {
+    const brand = faker.helpers.arrayElement(brands)
+    const am = faker.helpers.arrayElement(amUsers)
+    const sm = smUsers[smIndex]
+    
+    // Some stores might not have a manager yet
+    if (smIndex < smUsers.length - 1) smIndex++
+
+    const isCloudKitchen = faker.number.int({ min: 1, max: 100 }) > 85
+    
+    const store = await prisma.store.create({
+      data: {
+        code: `ST${1000 + i}`,
+        name: `${brand.name} ${faker.location.street()}`,
+        modelType: isCloudKitchen ? 'cloud_kitchen' : 'standard',
+        brandId: brand.id,
+        amId: am.id,
+        managerId: sm ? sm.id : null,
+        address: `${faker.location.streetAddress()}, ${faker.location.city()}`,
+        region: faker.helpers.arrayElement(['Miền Bắc', 'Miền Trung', 'Miền Nam']),
+      }
+    })
+
+    if (sm) {
+      await prisma.roleAssignment.updateMany({
+        where: { userId: sm.id, roleKey: 'store_manager' },
+        data: { storeId: store.id }
+      })
+    }
+    stores.push(store)
+  }
+
+  // ==========================================
+  // 3. GENERATE CRITERIA GROUPS & CRITERIA
+  // ==========================================
+  console.log('Generating Criteria & Checklists...')
+  const groupA = await prisma.criteriaGroup.create({ data: { code: 'A', name: 'Vệ Sinh An Toàn Thực Phẩm', weight: 0.30, color: '#ef4444' } })
+  const groupB = await prisma.criteriaGroup.create({ data: { code: 'B', name: 'Chất Lượng Dịch Vụ', weight: 0.15, color: '#3b82f6' } })
+  const groupC = await prisma.criteriaGroup.create({ data: { code: 'C', name: 'Chất Lượng Món', weight: 0.15, color: '#10b981' } })
+  const groupD = await prisma.criteriaGroup.create({ data: { code: 'D', name: 'Vận Hành & Khác', weight: 0.40, color: '#f59e0b' } })
+
+  const criteriaList = [
+    { code: 'A.1', group: groupA, content: 'Sàn nhà, trần nhà khu vực pha chế sạch sẽ', flag: 'none', points: 1 },
+    { code: 'A.2', group: groupA, content: 'Tủ mát, tủ đông đạt chuẩn nhiệt độ quy định', flag: 'none', points: 2 },
+    { code: 'A.3', group: groupA, content: 'Phát hiện côn trùng trong khu vực làm việc', flag: 'critical', points: 5 },
+    { code: 'B.1', group: groupB, content: 'Nhân viên chào hỏi khách đúng tiêu chuẩn', flag: 'none', points: 1 },
+    { code: 'B.2', group: groupB, content: 'Nhân viên mặc đồng phục đúng quy định', flag: 'none', points: 1 },
+    { code: 'C.1', group: groupC, content: 'Định lượng nguyên liệu đúng công thức', flag: 'none', points: 2 },
+    { code: 'C.2', group: groupC, content: 'Nguyên liệu hết hạn sử dụng', flag: 'risk', points: 5 },
+    { code: 'D.1', group: groupD, content: 'Camera an ninh hoạt động tốt', flag: 'none', points: 1 },
+    { code: 'D.2', group: groupD, content: 'Hệ thống POS, máy in bill không lỗi', flag: 'none', points: 1 }
+  ]
+
+  const createdCriteria = []
+  for (const c of criteriaList) {
+    const crit = await prisma.criteria.create({
+      data: { code: c.code, groupId: c.group.id, content: c.content, deductionPerError: c.points, maxDeduction: 5, flag: c.flag }
+    })
+    createdCriteria.push(crit)
+  }
+
+  const checklist = await prisma.checklistForm.create({
+    data: { name: 'Standard Operation Checklist', version: '2.0.0', status: 'published', publishedAt: new Date() }
   })
 
-  // Sections
-  const sectionA = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupA.id, name: 'Khu vực sàn & vệ sinh', order: 1 } })
-  const sectionB = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupB.id, name: 'Khu vực quầy', order: 2 } })
-  const sectionC = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupC.id, name: 'Kiểm tra món', order: 3 } })
-  const sectionD = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupD.id, name: 'Lưu trữ nguyên liệu', order: 4 } })
+  const secA = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupA.id, name: 'Khu vực Vệ sinh', order: 1 } })
+  const secB = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupB.id, name: 'Quầy phục vụ', order: 2 } })
+  const secC = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupC.id, name: 'Kiểm tra Bar/Bếp', order: 3 } })
+  const secD = await prisma.checklistSection.create({ data: { formId: checklist.id, groupId: groupD.id, name: 'Hệ thống thiết bị', order: 4 } })
 
-  // Section Items
-  await prisma.checklistSectionItem.create({ data: { sectionId: sectionA.id, criteriaId: criteria1.id, order: 1 } })
-  await prisma.checklistSectionItem.create({ data: { sectionId: sectionA.id, criteriaId: criteria2.id, order: 2 } })
-  await prisma.checklistSectionItem.create({ data: { sectionId: sectionB.id, criteriaId: criteria3.id, order: 1 } })
-  await prisma.checklistSectionItem.create({ data: { sectionId: sectionC.id, criteriaId: criteria4.id, order: 1 } })
-  await prisma.checklistSectionItem.create({ data: { sectionId: sectionD.id, criteriaId: criteria5.id, order: 1 } })
+  for (let i = 0; i < createdCriteria.length; i++) {
+    const c = createdCriteria[i]
+    let sectionId = secA.id
+    if (c.code.startsWith('B')) sectionId = secB.id
+    if (c.code.startsWith('C')) sectionId = secC.id
+    if (c.code.startsWith('D')) sectionId = secD.id
 
-  console.log('Seeding completed successfully!')
+    await prisma.checklistSectionItem.create({
+      data: { sectionId, criteriaId: c.id, order: i + 1 }
+    })
+  }
+
+  // ==========================================
+  // 4. GENERATE AUDITS & VIOLATIONS
+  // ==========================================
+  console.log('Generating Audits & Violations...')
+  const auditPlan = await prisma.auditPlan.create({
+    data: { name: 'Monthly Company Audit - 2026', type: 'adhoc', scope: 'company', formId: checklist.id, status: 'open' }
+  })
+
+  const auditStores = faker.helpers.shuffle(stores)
+  for (const store of auditStores) {
+    const qc = faker.helpers.arrayElement(qcUsers)
+    const isCompleted = faker.number.int({ min: 1, max: 100 }) > 20 // 80% completed
+
+    const assignment = await prisma.auditAssignment.create({
+      data: {
+        planId: auditPlan.id,
+        storeId: store.id,
+        auditorId: qc.id,
+        scheduledDate: faker.date.recent({ days: 30 }),
+        status: isCompleted ? 'completed' : 'pending'
+      }
+    })
+
+    if (isCompleted) {
+      const finalScore = faker.number.float({ min: 55.0, max: 100.0, fractionDigits: 1 })
+      let grade = 'excellent'
+      if (finalScore < 70) grade = 'fail'
+      else if (finalScore < 85) grade = 'pass'
+      else if (finalScore < 95) grade = 'good'
+
+      const isRisk = finalScore < 75 ? faker.datatype.boolean() : false
+
+      const audit = await prisma.audit.create({
+        data: {
+          formId: checklist.id,
+          storeId: store.id,
+          auditorId: qc.id,
+          finalScore,
+          grade,
+          isRiskTriggered: isRisk,
+          submittedAt: faker.date.recent({ days: 15 }),
+        }
+      })
+
+      // Link assignment
+      await prisma.auditAssignment.update({
+        where: { id: assignment.id },
+        data: { auditId: audit.id }
+      })
+
+      // Generate random violations if score is not 100
+      if (finalScore < 100) {
+        const numViolations = faker.number.int({ min: 1, max: 5 })
+        const pickedCriteria = faker.helpers.arrayElements(createdCriteria, numViolations)
+        
+        for (const crit of pickedCriteria) {
+          await prisma.violation.create({
+            data: {
+              auditId: audit.id,
+              criteriaId: crit.id,
+              numErrors: faker.number.int({ min: 1, max: 3 }),
+              note: faker.lorem.sentence(),
+              isCriticalTriggered: crit.flag === 'critical' ? true : false,
+              isRiskTriggered: crit.flag === 'risk' ? true : false,
+            }
+          })
+        }
+      }
+
+      // Generate Action Plan if failed or risk
+      if (grade === 'fail' || isRisk) {
+        await prisma.actionPlan.create({
+          data: {
+            auditId: audit.id,
+            storeId: store.id,
+            status: faker.helpers.arrayElement(['draft', 'submitted', 'rejected', 'closed']),
+            remediation: faker.lorem.paragraph(),
+            deadline: faker.date.soon({ days: 7 }),
+          }
+        })
+      }
+    }
+  }
+
+  console.log('✅ Seeding completed successfully! 1000+ realistic records inserted.')
 }
 
 main()

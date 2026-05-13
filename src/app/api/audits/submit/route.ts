@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { calculateRepeatInfo } from "@/lib/audit-repeat";
+import { calculateAuditScore, CriteriaInput, GroupWeight } from "@/lib/scoring";
 import { z } from "zod";
 
 const submitSchema = z.object({
@@ -16,7 +18,7 @@ const submitSchema = z.object({
 
 /**
  * POST /api/audits/submit
- * Scoring logic: Start at 100% for each group, subtract deductions per violation.
+ * Submit audit, tinh diem bang scoring engine va khoa assignment.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -55,100 +57,127 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    if (!assignment) return response.error("Assignment not found", 404);
-    if (assignment.status === "completed") return response.error("Audit already submitted", 400);
+    if (!assignment) return response.error("Khong tim thay assignment", 404);
+    if (!auditorId || assignment.auditorId !== auditorId) {
+      return response.forbidden("Ban khong duoc gan cho bai audit nay");
+    }
+    if (assignment.status === "completed") return response.error("Audit da duoc submit", 400);
 
     const form = assignment.plan.form;
-    
-    // 2. Scoring Calculation
-    // Group criteria by GroupId
-    const groupData: Record<string, { weight: number, code: string, deductions: number }> = {};
-    
-    // Initialize groups from sections
-    form.sections.forEach(s => {
-      if (!groupData[s.groupId]) {
-        groupData[s.groupId] = { 
-          weight: s.group.weight, 
-          code: s.group.code, 
-          deductions: 0 
-        };
+
+    const criteriaById = new Map(
+      form.sections
+        .flatMap((section) => section.items)
+        .map((item) => [item.criteriaId, item.criteria])
+    );
+
+    for (const violation of violations) {
+      if (!criteriaById.has(violation.criteriaId)) {
+        return response.error("Tieu chi khong thuoc checklist cua assignment nay", 400);
       }
+    }
+
+    const repeatInfo = await calculateRepeatInfo(prisma, assignment.storeId, violations);
+    const repeatByCriteriaId = new Map(repeatInfo.map((info) => [info.criteriaId, info]));
+
+    const groupWeights: GroupWeight[] = Array.from(
+      new Map(
+        form.sections.map((section) => [
+          section.groupId,
+          {
+            groupId: section.groupId,
+            groupCode: section.group.code,
+            weight: section.group.weight,
+          },
+        ])
+      ).values()
+    );
+
+    const scoringItems: CriteriaInput[] = violations.map((violation) => {
+      const criteria = criteriaById.get(violation.criteriaId)!;
+      return {
+        id: violation.criteriaId,
+        groupId: criteria.groupId,
+        groupCode: groupWeights.find((group) => group.groupId === criteria.groupId)?.groupCode || "",
+        maxScore: criteria.maxDeduction,
+        maxDeduction: criteria.maxDeduction,
+        deductionPerError: criteria.deductionPerError,
+        numErrors: violation.numErrors,
+        repeatCount: repeatByCriteriaId.get(violation.criteriaId)?.repeatCount || 1,
+        flag: criteria.flag as "none" | "critical" | "risk",
+      };
     });
 
-    const violationResults: any[] = [];
-    let isRiskTriggered = false;
+    const scoreResult = calculateAuditScore(scoringItems, groupWeights);
 
-    // Process violations
-    for (const v of violations) {
-      const criteria = await prisma.criteria.findUnique({ where: { id: v.criteriaId } });
-      if (!criteria) continue;
+    const violationResults = violations.map((violation) => {
+      const criteria = criteriaById.get(violation.criteriaId)!;
+      const repeat = repeatByCriteriaId.get(violation.criteriaId);
 
-      const deduction = Math.min(v.numErrors * criteria.deductionPerError, criteria.maxDeduction);
-      groupData[criteria.groupId].deductions += deduction;
+      return {
+        criteriaId: violation.criteriaId,
+        numErrors: violation.numErrors,
+        repeatCount: repeat?.repeatCount || 1,
+        note: violation.note,
+        isRiskTriggered: criteria.flag === "risk" && violation.numErrors > 0,
+        isCriticalTriggered:
+          (criteria.flag === "critical" && violation.numErrors > 0) ||
+          (repeat?.isCriticalTriggered || false),
+        evidence: violation.evidenceUrls,
+      };
+    });
 
-      if (criteria.flag === "risk" && v.numErrors > 0) isRiskTriggered = true;
-
-      violationResults.push({
-        criteriaId: v.criteriaId,
-        numErrors: v.numErrors,
-        note: v.note,
-        isRiskTriggered: criteria.flag === "risk" && v.numErrors > 0,
-        isCriticalTriggered: criteria.flag === "critical" && v.numErrors > 0,
-        evidence: v.evidenceUrls
-      });
-    }
-
-    // Calculate final scores per group and total
-    let finalScore = 0;
-    const groupScores: any[] = [];
-
-    for (const [groupId, data] of Object.entries(groupData)) {
-      const reachedScore = Math.max(0, 100 - data.deductions);
-      const weightedScore = reachedScore * data.weight;
-      finalScore += weightedScore;
-
-      groupScores.push({
-        groupId,
-        groupCode: data.code,
-        weight: data.weight,
-        maxScore: 100,
-        reachedScore,
-        percentage: reachedScore
-      });
-    }
-
-    // Determine grade
-    let grade = "fail";
-    if (finalScore >= 95) grade = "excellent";
-    else if (finalScore >= 85) grade = "good";
-    else if (finalScore >= 75) grade = "pass";
-    
-    if (isRiskTriggered) grade = "alarm";
+    const groupScores = Object.values(scoreResult.groups);
+    const hasActionPlanFindings = violations.some((violation) => violation.numErrors > 0);
 
     // 3. Save in Transaction
     const audit = await prisma.$transaction(async (tx) => {
-      const auditRecord = await tx.audit.create({
-        data: {
-          formId: form.id,
-          storeId: assignment.storeId,
-          auditorId: auditorId!,
-          finalScore: parseFloat(finalScore.toFixed(2)),
-          grade,
-          isRiskTriggered,
-          submittedAt: new Date(),
-          groupScores: {
-            create: groupScores.map(({groupId, ...gs}) => ({ ...gs, groupId }))
-          },
-          violations: {
-            create: violationResults.map(({evidence, ...vr}) => ({
-              ...vr,
-              evidences: {
-                create: evidence.map((url: string) => ({ url }))
-              }
-            }))
-          }
-        }
+      const existingAudit = await tx.audit.findFirst({
+        where: { assignment: { id: assignmentId } },
       });
+
+      if (existingAudit) {
+        await tx.violation.deleteMany({ where: { auditId: existingAudit.id } });
+        await tx.groupScore.deleteMany({ where: { auditId: existingAudit.id } });
+      }
+
+      const auditData = {
+        formId: form.id,
+        storeId: assignment.storeId,
+        auditorId: auditorId!,
+        finalScore: scoreResult.finalScore,
+        grade: scoreResult.grade,
+        isRiskTriggered: scoreResult.isRiskTriggered,
+        submittedAt: new Date(),
+        groupScores: {
+          create: groupScores.map((gs) => ({
+            groupId: gs.groupId,
+            groupCode: gs.groupCode,
+            weight: gs.weight,
+            maxScore: gs.maxScore,
+            reachedScore: gs.reachedScore,
+            percentage: gs.percentage,
+            triggeredCritical: gs.triggeredCritical,
+          })),
+        },
+        violations: {
+          create: violationResults.map(({ evidence, ...vr }) => ({
+            ...vr,
+            evidences: {
+              create: evidence.map((url: string) => ({ url })),
+            },
+          })),
+        },
+      };
+
+      const auditRecord = existingAudit
+        ? await tx.audit.update({
+            where: { id: existingAudit.id },
+            data: auditData,
+          })
+        : await tx.audit.create({
+            data: auditData,
+          });
 
       await tx.auditAssignment.update({
         where: { id: assignmentId },
@@ -158,12 +187,33 @@ export async function POST(request: NextRequest) {
         }
       });
 
+      if (hasActionPlanFindings) {
+        await tx.actionPlan.upsert({
+          where: { auditId: auditRecord.id },
+          update: {},
+          create: {
+            auditId: auditRecord.id,
+            storeId: assignment.storeId,
+            status: "draft",
+          },
+        });
+      }
+
       return auditRecord;
     });
 
-    return response.created(audit, "Audit submitted successfully");
+    return response.created(
+      {
+        id: audit.id,
+        finalScore: audit.finalScore,
+        grade: audit.grade,
+        isRiskTriggered: audit.isRiskTriggered,
+        repeatInfo,
+      },
+      "Submit audit thanh cong"
+    );
   } catch (error) {
     console.error("[POST /api/audits/submit] Error:", error);
-    return response.error("Internal server error", 500);
+    return response.error("Loi server", 500);
   }
 }

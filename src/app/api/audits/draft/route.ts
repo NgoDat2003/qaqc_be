@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { calculateRepeatInfo } from "@/lib/audit-repeat";
 import { z } from "zod";
 
 const draftSchema = z.object({
@@ -16,7 +17,7 @@ const draftSchema = z.object({
 
 /**
  * PATCH /api/audits/draft
- * Save progress of an audit without finalizing score or grade.
+ * Luu tien do audit dang lam, chua chot diem cuoi.
  */
 export async function PATCH(request: NextRequest) {
   try {
@@ -36,44 +37,76 @@ export async function PATCH(request: NextRequest) {
     // 1. Fetch Assignment
     const assignment = await prisma.auditAssignment.findUnique({
       where: { id: assignmentId },
-      include: { plan: true }
+      include: {
+        plan: {
+          include: {
+            form: {
+              include: {
+                sections: {
+                  include: {
+                    items: { include: { criteria: true } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     });
 
-    if (!assignment) return response.error("Assignment not found", 404);
-    if (assignment.status === "completed") return response.error("Audit already submitted", 400);
+    if (!assignment) return response.error("Khong tim thay assignment", 404);
+    if (!auditorId || assignment.auditorId !== auditorId) {
+      return response.forbidden("Ban khong duoc gan cho bai audit nay");
+    }
+    if (assignment.status === "completed") return response.error("Audit da duoc submit", 400);
+
+    const criteriaById = new Map(
+      assignment.plan.form.sections
+        .flatMap((section) => section.items)
+        .map((item) => [item.criteriaId, item.criteria])
+    );
+
+    for (const violation of violations) {
+      if (!criteriaById.has(violation.criteriaId)) {
+        return response.error("Tieu chi khong thuoc checklist cua assignment nay", 400);
+      }
+    }
+
+    const repeatInfo = await calculateRepeatInfo(prisma, assignment.storeId, violations);
+    const repeatByCriteriaId = new Map(repeatInfo.map((info) => [info.criteriaId, info]));
 
     // 2. Save Draft in Transaction
     const audit = await prisma.$transaction(async (tx) => {
-      // Find existing audit for this assignment
+      // Tim audit draft hien co cua assignment.
       let auditRecord = await tx.audit.findFirst({
         where: { assignment: { id: assignmentId } }
       });
 
       if (auditRecord) {
-        // Clear old draft data
+        // Xoa du lieu draft cu.
         await tx.violation.deleteMany({ where: { auditId: auditRecord.id } });
         await tx.groupScore.deleteMany({ where: { auditId: auditRecord.id } });
 
-        // Update basic info
+        // Cap nhat thong tin co ban.
         auditRecord = await tx.audit.update({
           where: { id: auditRecord.id },
           data: {
             updatedAt: new Date(),
-            submittedAt: null, // Ensure it's still a draft
+            submittedAt: null, // Dam bao van la draft.
           }
         });
       } else {
-        // Create new audit record in draft state
+        // Tao audit draft moi.
         auditRecord = await tx.audit.create({
           data: {
             formId: assignment.plan.formId,
             storeId: assignment.storeId,
             auditorId: auditorId!,
-            submittedAt: null, // Mark as draft
+            submittedAt: null, // Danh dau la draft.
           }
         });
 
-        // Link to assignment
+        // Gan audit vao assignment.
         await tx.auditAssignment.update({
           where: { id: assignmentId },
           data: { 
@@ -83,25 +116,30 @@ export async function PATCH(request: NextRequest) {
         });
       }
 
-      // Create violations for the draft
+      // Tao violations cho draft.
       await tx.violation.createMany({
         data: violations.map(v => ({
           auditId: auditRecord!.id,
           criteriaId: v.criteriaId,
           numErrors: v.numErrors,
+          repeatCount: repeatByCriteriaId.get(v.criteriaId)?.repeatCount || 1,
+          isCriticalTriggered:
+            (criteriaById.get(v.criteriaId)?.flag === "critical" && v.numErrors > 0) ||
+            (repeatByCriteriaId.get(v.criteriaId)?.isCriticalTriggered || false),
+          isRiskTriggered: criteriaById.get(v.criteriaId)?.flag === "risk" && v.numErrors > 0,
           note: v.note,
         }))
       });
 
-      // Note: We don't save evidence here to keep draft save lightweight. 
-      // Evidence is usually uploaded separately via /upload/evidence.
+      // Khong luu evidence o draft de giu thao tac nhe.
+      // Evidence thuong duoc upload rieng qua /upload/evidence.
 
       return auditRecord;
     });
 
-    return response.success(audit, "Draft saved successfully");
+    return response.success({ ...audit, repeatInfo }, "Da luu draft thanh cong");
   } catch (error) {
     console.error("[PATCH /api/audits/draft] Error:", error);
-    return response.error("Internal server error", 500);
+    return response.error("Loi server", 500);
   }
 }
