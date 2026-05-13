@@ -1,5 +1,14 @@
 import assert from "assert/strict";
 import { calculateRepeatInfo } from "../src/lib/audit-repeat";
+import {
+  ACTION_PLAN_STATUSES,
+  canEditActionPlan,
+  canReviewActionPlan,
+  canSubmitActionPlan,
+  getReviewedActionPlanStatus,
+  isActionPlanClosedByReview,
+  isActionPlanStatus,
+} from "../src/lib/action-plan-workflow";
 import { calculateAuditScore, CriteriaInput, GroupWeight } from "../src/lib/scoring";
 
 type TestCase = {
@@ -214,6 +223,49 @@ const tests: TestCase[] = [
       ]);
 
       assert.deepEqual(queriedIds, ["criteria-1"]);
+    },
+  },
+  {
+    name: "action plan: chi chap nhan 4 status chinh thuc",
+    run: () => {
+      assert.deepEqual(ACTION_PLAN_STATUSES, ["draft", "submitted", "rejected", "closed"]);
+      assert.equal(isActionPlanStatus("draft"), true);
+      assert.equal(isActionPlanStatus("submitted"), true);
+      assert.equal(isActionPlanStatus("rejected"), true);
+      assert.equal(isActionPlanStatus("closed"), true);
+      assert.equal(isActionPlanStatus("confirmed"), false);
+      assert.equal(isActionPlanStatus("in_progress"), false);
+    },
+  },
+  {
+    name: "action plan: SM chi duoc edit va submit draft hoac rejected",
+    run: () => {
+      assert.equal(canEditActionPlan("draft"), true);
+      assert.equal(canEditActionPlan("rejected"), true);
+      assert.equal(canEditActionPlan("submitted"), false);
+      assert.equal(canEditActionPlan("closed"), false);
+      assert.equal(canSubmitActionPlan("draft"), true);
+      assert.equal(canSubmitActionPlan("rejected"), true);
+      assert.equal(canSubmitActionPlan("submitted"), false);
+      assert.equal(canSubmitActionPlan("closed"), false);
+    },
+  },
+  {
+    name: "action plan: QAM chi review AP submitted",
+    run: () => {
+      assert.equal(canReviewActionPlan("submitted"), true);
+      assert.equal(canReviewActionPlan("draft"), false);
+      assert.equal(canReviewActionPlan("rejected"), false);
+      assert.equal(canReviewActionPlan("closed"), false);
+    },
+  },
+  {
+    name: "action plan: confirm dong AP, reject tra ve rejected",
+    run: () => {
+      assert.equal(getReviewedActionPlanStatus("confirm"), "closed");
+      assert.equal(getReviewedActionPlanStatus("reject"), "rejected");
+      assert.equal(isActionPlanClosedByReview("confirm"), true);
+      assert.equal(isActionPlanClosedByReview("reject"), false);
     },
   },
 ];

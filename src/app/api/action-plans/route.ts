@@ -2,6 +2,16 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { getRoles } from "@/lib/rbac";
+import { isActionPlanStatus } from "@/lib/action-plan-workflow";
+
+async function getRoleScopedStoreIds(userId: string, roleKey: string) {
+  const scopes = await prisma.roleAssignment.findMany({
+    where: { userId, roleKey },
+    select: { storeId: true },
+  });
+
+  return scopes.map((scope) => scope.storeId).filter(Boolean) as string[];
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,14 +25,24 @@ export async function GET(request: NextRequest) {
 
     const where: any = {};
     if (storeId) where.storeId = storeId;
-    if (status) where.status = status;
+    if (status) {
+      if (!isActionPlanStatus(status)) {
+        return response.error("Invalid action plan status", 400);
+      }
+      where.status = status;
+    }
 
-    // Apply role-based scoping
     if (roles.includes("company_admin") || roles.includes("qa_manager") || roles.includes("executive_viewer")) {
       // CA, QAM, Executive can see all
     } else if (roles.includes("am")) {
+      const roleScopedStoreIds = await getRoleScopedStoreIds(userId, "am");
       const amStores = await prisma.store.findMany({
-        where: { amId: userId },
+        where: {
+          OR: [
+            { amId: userId },
+            { id: { in: roleScopedStoreIds } },
+          ],
+        },
         select: { id: true }
       });
       const amStoreIds = amStores.map(s => s.id);
@@ -34,11 +54,7 @@ export async function GET(request: NextRequest) {
         where.storeId = { in: amStoreIds };
       }
     } else if (roles.includes("store_manager")) {
-      const smStores = await prisma.roleAssignment.findMany({
-        where: { userId, roleKey: "store_manager" },
-        select: { storeId: true }
-      });
-      const smStoreIds = smStores.map(s => s.storeId).filter(Boolean) as string[];
+      const smStoreIds = await getRoleScopedStoreIds(userId, "store_manager");
       
       if (where.storeId && !smStoreIds.includes(where.storeId)) {
          return response.success([]); // Requested store not in SM scope
@@ -54,7 +70,8 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         store: { select: { id: true, name: true, code: true } },
-        audit: { select: { id: true, finalScore: true, grade: true } },
+        audit: { select: { id: true, finalScore: true, grade: true, submittedAt: true } },
+        closedBy: { select: { id: true, fullName: true, email: true } },
       },
       orderBy: { createdAt: "desc" },
     });
