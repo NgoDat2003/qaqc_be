@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 import { z } from "zod";
 
 const createFormSchema = z.object({
@@ -18,18 +19,29 @@ export async function GET(request: NextRequest) {
     const forbidden = requireRole(request, ["company_admin", "qa_manager", "qc_auditor"]);
     if (forbidden) return forbidden;
 
-    const forms = await prisma.checklistForm.findMany({
-      include: {
-        sections: {
-          include: {
-            items: { include: { criteria: true } }
-          }
-        }
-      },
-      orderBy: { createdAt: "desc" }
-    });
+    const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
 
-    return response.success(forms);
+    const [total, forms] = await prisma.$transaction([
+      prisma.checklistForm.count(),
+      prisma.checklistForm.findMany({
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          name: true,
+          version: true,
+          status: true,
+          publishedAt: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: { select: { sections: true, auditPlans: true, audits: true } },
+        },
+        orderBy: { createdAt: "desc" }
+      }),
+    ]);
+
+    return response.success(forms, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("[GET /api/checklists] Error:", error);
     return response.error("Internal server error", 500);

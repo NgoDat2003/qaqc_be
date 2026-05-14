@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 import { z } from "zod";
 
 const createPlanSchema = z.object({
@@ -22,20 +23,30 @@ export async function GET(request: NextRequest) {
     const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
 
-    const plans = await prisma.auditPlan.findMany({
-      include: {
-        form: { select: { name: true, version: true } },
-        assignments: {
-          include: {
-            store: { select: { name: true, code: true } },
-            auditor: { select: { fullName: true } }
-          }
-        }
-      },
-      orderBy: { createdAt: "desc" }
-    });
+    const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
 
-    return response.success(plans);
+    const [total, plans] = await prisma.$transaction([
+      prisma.auditPlan.count(),
+      prisma.auditPlan.findMany({
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          name: true,
+          type: true,
+          scope: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          form: { select: { id: true, name: true, version: true, status: true } },
+          _count: { select: { assignments: true } },
+        },
+        orderBy: { createdAt: "desc" }
+      }),
+    ]);
+
+    return response.success(plans, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("[GET /api/audit-plans] Error:", error);
     return response.error("Internal server error", 500);
