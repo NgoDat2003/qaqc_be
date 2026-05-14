@@ -62,6 +62,325 @@ const { page, limit, total, totalPages } = response.meta
 | `GET /api/criteria` | Có filter `groupId`, group trả đủ `id/code/name/weight`. |
 | `GET /api/brands` | Có `_count.stores`. |
 
+## Trước Và Sau
+
+### Trước Task Này
+
+List API thường trả:
+
+```ts
+{
+  success: true
+  data: T[]
+}
+```
+
+Một số route trả relation rất rộng, ví dụ checklist list trả cả `sections/items/criteria`, audit plan list trả cả `assignments`.
+
+### Sau Task Này
+
+List API chính trả:
+
+```ts
+{
+  success: true
+  data: T[]
+  meta: {
+    page: number
+    limit: number
+    total: number
+    totalPages: number
+  }
+}
+```
+
+FE không nên dùng `data.length` để tính tổng record nữa. Dùng `meta.total`.
+
+## Contract Theo Endpoint
+
+### `GET /api/audits`
+
+Query:
+
+```txt
+page?: number
+limit?: number
+storeId?: string
+```
+
+Data item chính:
+
+```ts
+{
+  id: string
+  finalScore: number
+  grade: string
+  isRiskTriggered: boolean
+  submittedAt: string | null
+  createdAt: string
+  store: {
+    id: string
+    code: string
+    name: string
+  }
+  assignment: {
+    plan: {
+      id: string
+      name: string
+    } | null
+  } | null
+}
+```
+
+FE cần sửa:
+
+- Table audit dùng `meta.total` cho tổng số dòng.
+- Store label dùng `store.code` + `store.name`.
+- Plan label dùng `assignment.plan.name` nếu có.
+
+### `GET /api/action-plans`
+
+Query:
+
+```txt
+page?: number
+limit?: number
+storeId?: string
+status?: "draft" | "submitted" | "rejected" | "closed"
+```
+
+Data item chính:
+
+```ts
+{
+  id: string
+  status: string
+  remediation: string | null
+  deadline: string | null
+  createdAt: string
+  updatedAt: string
+  closedAt: string | null
+  store: {
+    id: string
+    code: string
+    name: string
+  }
+  audit: {
+    id: string
+    finalScore: number
+    grade: string
+    submittedAt: string | null
+  }
+  closedBy: {
+    id: string
+    fullName: string
+    email: string
+  } | null
+}
+```
+
+FE cần sửa:
+
+- Status filter chỉ dùng 4 status chính thức.
+- Nếu backend trả `data=[]` và `meta.total=0`, đó có thể là do ngoài store scope, không phải lỗi UI.
+
+### `GET /api/audit-plans`
+
+Data item chính:
+
+```ts
+{
+  id: string
+  name: string
+  type: string
+  scope: string
+  status: string
+  createdAt: string
+  updatedAt: string
+  form: {
+    id: string
+    name: string
+    version: string
+    status: string
+  }
+  _count: {
+    assignments: number
+  }
+}
+```
+
+FE cần sửa:
+
+- List screen không đọc `assignments` trực tiếp nữa.
+- Muốn xem store/auditor assignment thì gọi detail route `GET /api/audit-plans/:id`.
+
+### `GET /api/stores`
+
+Query:
+
+```txt
+page?: number
+limit?: number
+brandId?: string
+isActive?: "true" | "false"
+```
+
+Data item có display fields:
+
+```ts
+{
+  id: string
+  code: string
+  name: string
+  modelType: string
+  region: string | null
+  province: string | null
+  district: string | null
+  ward: string | null
+  address: string | null
+  isActive: boolean
+  brand: { id: string; code: string; name: string }
+  am: { id: string; fullName: string; email: string } | null
+  manager: { id: string; fullName: string; email: string } | null
+}
+```
+
+FE cần sửa:
+
+- Store picker/table có thể hiển thị brand/AM/manager ngay, không cần lookup thêm.
+- Khi dùng filter brand/active, vẫn gửi kèm `page/limit`.
+
+### `GET /api/users`
+
+Data item chính:
+
+```ts
+{
+  id: string
+  email: string
+  fullName: string
+  phone: string | null
+  isActive: boolean
+  roleAssignments: Array<{
+    id: string
+    roleKey: string
+    storeId: string | null
+  }>
+}
+```
+
+FE cần sửa:
+
+- Không expect `password`.
+- Role display đọc từ `roleAssignments`.
+
+### `GET /api/checklists`
+
+Data item chính:
+
+```ts
+{
+  id: string
+  name: string
+  version: string
+  status: string
+  publishedAt: string | null
+  createdAt: string
+  updatedAt: string
+  _count: {
+    sections: number
+    auditPlans: number
+    audits: number
+  }
+}
+```
+
+FE cần sửa:
+
+- Checklist list/table chỉ dùng summary.
+- Checklist builder/detail phải gọi detail route.
+
+### `GET /api/criteria`
+
+Query:
+
+```txt
+page?: number
+limit?: number
+groupId?: string
+```
+
+Data item chính:
+
+```ts
+{
+  id: string
+  code: string
+  content: string
+  deductionPerError: number
+  maxDeduction: number
+  flag: "none" | "critical" | "risk"
+  isActive: boolean
+  group: {
+    id: string
+    code: string
+    name: string
+    weight: number
+  }
+}
+```
+
+FE cần sửa:
+
+- Criteria table/picker dùng `group.code`, `group.name`, `group.weight`.
+
+### `GET /api/brands`
+
+Data item chính:
+
+```ts
+{
+  id: string
+  code: string
+  name: string
+  isActive: boolean
+  _count: {
+    stores: number
+  }
+}
+```
+
+FE cần sửa:
+
+- Brand list dùng `_count.stores` nếu cần hiển thị số store.
+
+## API Client Gợi Ý
+
+FE có thể định nghĩa type chung:
+
+```ts
+type PaginationMeta = {
+  page: number
+  limit: number
+  total: number
+  totalPages: number
+}
+
+type ListResponse<T> = {
+  success: true
+  data: T[]
+  message?: string
+  meta: PaginationMeta
+}
+```
+
+Với React Query/TanStack Query, query key nên đưa filter + pagination vào:
+
+```ts
+["audits", { page, limit, storeId }]
+["action-plans", { page, limit, storeId, status }]
+```
+
 ## Breaking Change Mềm FE Cần Chú Ý
 
 ### Checklist List
