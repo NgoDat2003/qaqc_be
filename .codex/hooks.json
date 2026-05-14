@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"$(git -C \"$(git rev-parse --show-toplevel 2>/dev/null || echo .)\" branch --show-current 2>/dev/null)\" != \"main\" ] || { echo '{\"block\": true, \"message\": \"Không được edit trên main branch! Tạo feature branch trước: git checkout -b feat/ten-task\"}' >&2; exit 2; }",
+            "command": "node .codex/hooks/prevent-main-edit.cjs",
             "timeout": 5
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$(git rev-parse --show-toplevel 2>/dev/null || echo .)\" && npm run lint --silent 2>&1 | head -20",
+            "command": "node .codex/hooks/post-edit-lint.cjs",
             "timeout": 30
           }
         ]

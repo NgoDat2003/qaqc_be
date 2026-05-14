@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole, getRoles } from "@/lib/rbac";
 import { canSubmitActionPlan } from "@/lib/action-plan-workflow";
+import { getAssignedStoreIds } from "@/lib/scope";
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -26,11 +27,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const userId = request.headers.get("x-user-id");
     if (!roles.includes("store_manager") || !userId) return response.forbidden();
 
-    const smStores = await prisma.roleAssignment.findMany({
-      where: { userId, roleKey: "store_manager" },
-      select: { storeId: true },
-    });
-    const validStoreIds = smStores.map((s) => s.storeId).filter(Boolean) as string[];
+    const validStoreIds = await getAssignedStoreIds(prisma, userId, "store_manager");
     if (!validStoreIds.includes(actionPlan.storeId)) {
       return response.error("Unauthorized to submit this store's action plan", 403);
     }

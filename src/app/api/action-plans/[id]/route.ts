@@ -3,6 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { getRoles, requireRole } from "@/lib/rbac";
 import { canEditActionPlan } from "@/lib/action-plan-workflow";
+import {
+  canAccessActionPlanRecord,
+  getAssignedStoreIds,
+  getRequestUser,
+} from "@/lib/scope";
 import { z } from "zod";
 
 const updateActionPlanSchema = z.object({
@@ -10,20 +15,10 @@ const updateActionPlanSchema = z.object({
   deadline: z.string().datetime("Invalid deadline format"),
 });
 
-async function getRoleScopedStoreIds(userId: string, roleKey: string) {
-  const scopes = await prisma.roleAssignment.findMany({
-    where: { userId, roleKey },
-    select: { storeId: true },
-  });
-
-  return scopes.map((scope) => scope.storeId).filter(Boolean) as string[];
-}
-
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const userId = request.headers.get("x-user-id");
-    const roles = getRoles(request);
-    if (!userId || roles.length === 0) return response.unauthorized();
+    const user = getRequestUser(request);
+    if (!user) return response.unauthorized();
 
     const { id } = params;
 
@@ -71,36 +66,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
     if (!actionPlan) return response.error("Action Plan not found", 404);
 
-    const canReadAll =
-      roles.includes("qa_manager") ||
-      roles.includes("company_admin") ||
-      roles.includes("executive_viewer");
-
-    if (!canReadAll && roles.includes("store_manager")) {
-      const smStores = await prisma.roleAssignment.findMany({
-        where: { userId, roleKey: "store_manager" },
-        select: { storeId: true },
-      });
-      const validStoreIds = smStores.map((s) => s.storeId).filter(Boolean) as string[];
-      if (!validStoreIds.includes(actionPlan.storeId)) {
-        return response.error("Unauthorized access to this store's action plan", 403);
-      }
-    } else if (!canReadAll && roles.includes("am")) {
-      const amStores = await prisma.store.findMany({
-        where: {
-          OR: [
-            { amId: userId },
-            { id: { in: await getRoleScopedStoreIds(userId, "am") } },
-          ],
-        },
-        select: { id: true },
-      });
-      const validStoreIds = amStores.map((s) => s.id);
-      if (!validStoreIds.includes(actionPlan.storeId)) {
-        return response.error("Unauthorized access to this store's action plan", 403);
-      }
-    } else if (!canReadAll) {
-      return response.forbidden();
+    const hasAccess = await canAccessActionPlanRecord(prisma, user.userId, user.roles, actionPlan);
+    if (!hasAccess) {
+      return response.error("Unauthorized access to this action plan", 403);
     }
 
     return response.success(actionPlan);
@@ -128,11 +96,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     const userId = request.headers.get("x-user-id");
     if (!roles.includes("store_manager") || !userId) return response.forbidden();
 
-    const smStores = await prisma.roleAssignment.findMany({
-      where: { userId, roleKey: "store_manager" },
-      select: { storeId: true },
-    });
-    const validStoreIds = smStores.map((s) => s.storeId).filter(Boolean) as string[];
+    const validStoreIds = await getAssignedStoreIds(prisma, userId, "store_manager");
     if (!validStoreIds.includes(actionPlan.storeId)) {
       return response.error("Unauthorized to update this store's action plan", 403);
     }

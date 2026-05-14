@@ -5,5 +5,5 @@
     "moduleResolution": "node",
     "noEmit": false
   },
-  "include": ["tests/**/*.ts", "src/lib/**/*.ts"]
+  "include": ["tests/**/*.ts", "src/lib/**/*.ts", "src/app/api/**/*.ts"]
 }

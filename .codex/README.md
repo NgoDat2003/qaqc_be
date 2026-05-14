@@ -4,6 +4,8 @@ Folder này là nơi Codex lưu quy ước, bộ nhớ làm việc, kế hoạch
 
 Thứ tự đọc khi làm backend:
 
+Backend nay la **Codex-primary**. Khong copy `.claude/`, `.agents/skills/` hoac ClaudeKit v2.16 vao backend. Cac `/ck:` skills duoc cung cap boi Codex global/plugin runtime; repo backend chi luu project context, rules, memory, plans, ADR va hooks.
+
 1. `AGENTS.md`
 2. `.codex/INSTRUCTIONS.md`
 3. `.codex/MEMORY.md`

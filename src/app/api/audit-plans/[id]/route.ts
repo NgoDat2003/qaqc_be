@@ -5,7 +5,7 @@ import { requireRole } from "@/lib/rbac";
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const forbidden = requireRole(request, ["company_admin", "qa_manager", "qc_auditor"]);
+    const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
 
     const { id } = params;

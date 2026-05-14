@@ -25,3 +25,12 @@
 ## Ưu Tiên Làm Việc
 
 Sửa đúng nghiệp vụ trước, sau đó chuẩn hóa API contract, rồi mới dọn kiến trúc/performance.
+
+## Cập Nhật Phiên 2026-05-14
+
+- Task 3 RBAC Scope đã được triển khai trên branch `codex/rbac-scope`.
+- Đã tạo `src/lib/scope.ts` và refactor audit/AP/analytics routes dùng helper scope chung.
+- Đã fix review findings: validate roles shape trong `getRequestUser`, và audit list dùng union scope cho user multi-role `qc_auditor + store_manager/am`.
+- Đã bổ sung route-level integration tests cho audit plan, audit list/detail, action plan list/detail/submit và analytics overview.
+- Verification mới nhất: `npm.cmd test` pass `44/44`, `npm.cmd run build` pass, `git diff --check` pass.
+- Bước tiếp theo sau Task 3: chuẩn hóa pagination/API contract hoặc xử lý nhóm issue performance/security cơ bản theo roadmap.

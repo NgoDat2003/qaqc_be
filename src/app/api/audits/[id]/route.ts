@@ -1,13 +1,12 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
-import { getRoles } from "@/lib/rbac";
+import { canAccessAuditRecord, getRequestUser } from "@/lib/scope";
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const userId = request.headers.get("x-user-id");
-    const roles = getRoles(request);
-    if (!userId || roles.length === 0) return response.unauthorized();
+    const user = getRequestUser(request);
+    if (!user) return response.unauthorized();
 
     const { id } = params;
 
@@ -22,7 +21,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
           },
         },
         store: true,
-                assignment: {
+        assignment: {
           include: {
             plan: { include: { form: true } },
           },
@@ -32,15 +31,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
     if (!audit) return response.error("Audit not found", 404);
 
-    // Additional Scoping checks can be done here, e.g. if SM requesting this audit, ensure store matches.
-    if (roles.includes("store_manager") && !roles.includes("company_admin") && !roles.includes("qa_manager")) {
-      const smStores = await prisma.roleAssignment.findMany({
-        where: { userId, roleKey: "store_manager" },
-      });
-      const validStoreIds = smStores.map(s => s.storeId);
-      if (!validStoreIds.includes(audit.storeId)) {
-        return response.error("Unauthorized access to this store's audit", 403);
-      }
+    const hasAccess = await canAccessAuditRecord(prisma, user.userId, user.roles, audit);
+    if (!hasAccess) {
+      return response.error("Unauthorized access to this audit", 403);
     }
 
     return response.success(audit);
