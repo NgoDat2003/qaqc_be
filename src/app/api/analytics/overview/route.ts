@@ -1,35 +1,18 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
-import { getRoles } from "@/lib/rbac";
+import { canReadAllQaData, getReadableStoreIds, getRequestUser } from "@/lib/scope";
 
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.headers.get("x-user-id");
-    const roles = getRoles(request);
-    if (!userId || roles.length === 0) return response.unauthorized();
+    const user = getRequestUser(request);
+    if (!user) return response.unauthorized();
 
-    if (roles.includes("qc_auditor") && !roles.includes("company_admin") && !roles.includes("qa_manager")) {
-      return response.success({ message: "QC Auditors do not have analytics overview" });
+    if (user.roles.includes("qc_auditor") && !canReadAllQaData(user.roles)) {
+      return response.forbidden("QC auditors do not have analytics overview access");
     }
 
-    // Determine scoped stores
-    let storeIds: string[] | undefined = undefined;
-
-    if (roles.includes("store_manager") && !roles.includes("company_admin") && !roles.includes("qa_manager")) {
-      const smStores = await prisma.roleAssignment.findMany({
-        where: { userId, roleKey: "store_manager" },
-        select: { storeId: true }
-      });
-      storeIds = smStores.map(s => s.storeId).filter(Boolean) as string[];
-    } else if (roles.includes("am") && !roles.includes("company_admin") && !roles.includes("qa_manager")) {
-      const amStores = await prisma.store.findMany({
-        where: { amId: userId },
-        select: { id: true }
-      });
-      storeIds = amStores.map(s => s.id);
-    }
-
+    const storeIds = await getReadableStoreIds(prisma, user.userId, user.roles);
     const storeFilter = storeIds ? { storeId: { in: storeIds } } : {};
 
     // Get date range for current month

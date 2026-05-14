@@ -2,6 +2,11 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import {
+  canReviewActionPlan,
+  getReviewedActionPlanStatus,
+  isActionPlanClosedByReview,
+} from "@/lib/action-plan-workflow";
 import { z } from "zod";
 
 const confirmSchema = z.object({
@@ -11,7 +16,7 @@ const confirmSchema = z.object({
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const forbidden = requireRole(request, ["qa_manager", "company_admin"]);
+    const forbidden = requireRole(request, ["qa_manager"]);
     if (forbidden) return forbidden;
 
     const { id } = params;
@@ -19,7 +24,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const actionPlan = await prisma.actionPlan.findUnique({ where: { id } });
     if (!actionPlan) return response.error("Action Plan not found", 404);
 
-    if (actionPlan.status !== "submitted") {
+    if (!canReviewActionPlan(actionPlan.status)) {
       return response.error("Can only review action plan in submitted status", 400);
     }
 
@@ -31,14 +36,24 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     }
 
     const reviewerId = request.headers.get("x-user-id") || undefined;
-    const newStatus = parsed.data.action === "confirm" ? "closed" : "in_progress";
+    const newStatus = getReviewedActionPlanStatus(parsed.data.action);
+    const shouldClose = isActionPlanClosedByReview(parsed.data.action);
 
     const updated = await prisma.actionPlan.update({
       where: { id },
-      data: { 
+      data: {
         status: newStatus,
-        closedById: reviewerId,
-        closedAt: new Date(),
+        closedById: shouldClose ? reviewerId : null,
+        closedAt: shouldClose ? new Date() : null,
+      },
+      select: {
+        id: true,
+        status: true,
+        remediation: true,
+        deadline: true,
+        closedAt: true,
+        store: { select: { id: true, code: true, name: true } },
+        closedBy: { select: { id: true, fullName: true, email: true } },
       },
     });
 

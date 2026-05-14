@@ -1,5 +1,11 @@
 # Maycha QA/QC — Backend
 
+## AI Workflow Boundary
+- Backend nay dung Codex lam workflow chinh: `AGENTS.md` + `.codex/`.
+- `/ck:` skills den tu Codex global/plugin runtime, khong copy skill packs vao repo.
+- Khong them `.claude/`, `.agents/`, hoac ClaudeKit source folder vao backend.
+- Frontend co the dung ClaudeKit rieng, nhung khong dung chung workflow folder voi backend.
+
 ## Stack
 - Framework: Next.js API Routes (REST), TypeScript strict
 - ORM: Prisma + SQLite (dev) / PostgreSQL (prod)

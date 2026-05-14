@@ -361,7 +361,7 @@ model ActionPlan {
   audit   Audit  @relation(fields: [auditId], references: [id])
   storeId String
   store   Store  @relation(fields: [storeId], references: [id])
-  // "draft"|"submitted"|"in_progress"|"closed"
+  // "draft"|"submitted"|"rejected"|"closed"
   status      String    @default("draft")
   remediation String?
   deadline    DateTime?
