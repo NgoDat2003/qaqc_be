@@ -23,6 +23,7 @@ import {
   getRequestUser,
   getReadableStoreIds,
 } from "../src/lib/scope";
+import { getPaginationMeta, getPaginationParams } from "../src/lib/pagination";
 import { prisma } from "../src/lib/prisma";
 import { calculateAuditScore, CriteriaInput, GroupWeight } from "../src/lib/scoring";
 
@@ -196,9 +197,9 @@ function setPrismaModel(model: string, implementation: Record<string, unknown>) 
 
 function routeScopeFixtures() {
   const stores = [
-    { id: "store-sm", name: "Store SM", code: "SM", amId: "am-1", managerId: "sm-1" },
-    { id: "store-am", name: "Store AM", code: "AM", amId: "am-1", managerId: "sm-other" },
-    { id: "store-other", name: "Store Other", code: "OT", amId: "am-other", managerId: "sm-other" },
+    { id: "store-sm", name: "Store SM", code: "SM", brandId: "brand-1", isActive: true, amId: "am-1", managerId: "sm-1" },
+    { id: "store-am", name: "Store AM", code: "AM", brandId: "brand-1", isActive: false, amId: "am-1", managerId: "sm-other" },
+    { id: "store-other", name: "Store Other", code: "OT", brandId: "brand-2", isActive: true, amId: "am-other", managerId: "sm-other" },
   ];
   const audits = [
     { id: "audit-sm", storeId: "store-sm", auditorId: "qc-other", finalScore: 90, grade: "good", submittedAt: new Date("2026-05-01"), store: stores[0] },
@@ -219,6 +220,9 @@ function matchesWhere(record: any, where: any): boolean {
 
   if (where.OR) return where.OR.some((condition: any) => matchesWhere(record, condition));
   if (where.AND) return where.AND.every((condition: any) => matchesWhere(record, condition));
+  if (where.brandId && record.brandId !== where.brandId) return false;
+  if (where.groupId && record.groupId !== where.groupId) return false;
+  if (where.isActive !== undefined && record.isActive !== where.isActive) return false;
   if (where.storeId) {
     if (typeof where.storeId === "string" && record.storeId !== where.storeId) return false;
     if (where.storeId.in && !where.storeId.in.includes(record.storeId)) return false;
@@ -229,8 +233,40 @@ function matchesWhere(record: any, where: any): boolean {
   return true;
 }
 
+function paginateRows<T>(rows: T[], args: any): T[] {
+  const skip = args.skip || 0;
+  const take = args.take ?? rows.length;
+  return rows.slice(skip, skip + take);
+}
+
 function setupRoutePrisma() {
   const fixtures = routeScopeFixtures();
+  const brands = [
+    { id: "brand-1", code: "MC", name: "Maycha", isActive: true, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), _count: { stores: 2 } },
+    { id: "brand-2", code: "TH", name: "Tam Hao", isActive: true, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), _count: { stores: 1 } },
+  ];
+  const users = [
+    { id: "user-1", email: "one@example.com", fullName: "User One", phone: null, isActive: true, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), roleAssignments: [{ id: "ra-1", roleKey: "qa_manager", storeId: null }] },
+    { id: "user-2", email: "two@example.com", fullName: "User Two", phone: null, isActive: true, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), roleAssignments: [{ id: "ra-2", roleKey: "store_manager", storeId: "store-sm" }] },
+  ];
+  const criteriaGroups = [{ id: "group-c", code: "C", name: "Chat luong", weight: 0.3 }];
+  const criteria = [
+    { id: "criteria-1", groupId: "group-c", code: "C001", content: "Noi dung 1", deductionPerError: 1, maxDeduction: 5, flag: "none", isActive: true, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), group: criteriaGroups[0] },
+    { id: "criteria-2", groupId: "group-c", code: "C002", content: "Noi dung 2", deductionPerError: 1, maxDeduction: 5, flag: "critical", isActive: true, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), group: criteriaGroups[0] },
+  ];
+  const checklistForms = [
+    { id: "form-1", name: "Checklist 1", version: "v1", status: "published", publishedAt: new Date("2026-01-01"), createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), _count: { sections: 2, auditPlans: 1, audits: 3 } },
+    { id: "form-2", name: "Checklist 2", version: "v2", status: "draft", publishedAt: null, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), _count: { sections: 1, auditPlans: 0, audits: 0 } },
+  ];
+  const auditPlans = [
+    { id: "plan-1", name: "Plan 1", type: "adhoc", scope: "company", status: "open", createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), form: { id: "form-1", name: "Checklist 1", version: "v1", status: "published" }, _count: { assignments: 2 } },
+    { id: "plan-2", name: "Plan 2", type: "adhoc", scope: "company", status: "closed", createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-02"), form: { id: "form-2", name: "Checklist 2", version: "v2", status: "draft" }, _count: { assignments: 1 } },
+  ];
+
+  Object.defineProperty(prisma, "$transaction", {
+    value: async (queries: any[]) => Promise.all(queries),
+    configurable: true,
+  });
 
   setPrismaModel("roleAssignment", {
     findMany: async (args: any) => {
@@ -244,10 +280,13 @@ function setupRoutePrisma() {
     },
   });
   setPrismaModel("store", {
+    count: async (args: any = {}) =>
+      fixtures.stores.filter((store) => matchesWhere(store, args.where)).length,
     findMany: async (args: any) => {
       const where = args.where || {};
-      return fixtures.stores
+      const stores = fixtures.stores
         .filter((store) => {
+          if (where.brandId || where.isActive !== undefined) return matchesWhere(store, where);
           if (where.amId) return store.amId === where.amId;
           if (where.managerId) return store.managerId === where.managerId;
           if (where.OR) {
@@ -260,17 +299,31 @@ function setupRoutePrisma() {
           }
           return true;
         })
-        .map((store) => ({ id: store.id, name: store.name, code: store.code }));
+        .map((store) => ({
+          id: store.id,
+          name: store.name,
+          code: store.code,
+          brand: { id: "brand-1", code: "MC", name: "Maycha" },
+          am: { id: "am-1", fullName: "AM One", email: "am@example.com" },
+          manager: { id: "sm-1", fullName: "SM One", email: "sm@example.com" },
+        }));
+
+      return paginateRows(stores, args);
     },
   });
   setPrismaModel("audit", {
+    count: async (args: any = {}) =>
+      fixtures.audits.filter((audit) => matchesWhere(audit, args.where)).length,
     findMany: async (args: any) =>
-      fixtures.audits
+      paginateRows(
+        fixtures.audits
         .filter((audit) => matchesWhere(audit, args.where))
         .map((audit) => ({
           ...audit,
           assignment: { plan: { name: "Plan 1" } },
         })),
+        args
+      ),
     findUnique: async (args: any) => {
       const audit = fixtures.audits.find((item) => item.id === args.where.id);
       if (!audit) return null;
@@ -283,8 +336,10 @@ function setupRoutePrisma() {
     },
   });
   setPrismaModel("actionPlan", {
+    count: async (args: any = {}) =>
+      fixtures.actionPlans.filter((actionPlan) => matchesWhere(actionPlan, args.where)).length,
     findMany: async (args: any) =>
-      fixtures.actionPlans.filter((actionPlan) => matchesWhere(actionPlan, args.where)),
+      paginateRows(fixtures.actionPlans.filter((actionPlan) => matchesWhere(actionPlan, args.where)), args),
     findUnique: async (args: any) =>
       fixtures.actionPlans.find((actionPlan) => actionPlan.id === args.where.id) || null,
     update: async (args: any) => {
@@ -293,16 +348,35 @@ function setupRoutePrisma() {
     },
   });
   setPrismaModel("auditPlan", {
+    findMany: async (args: any) => paginateRows(auditPlans, args),
     findUnique: async (args: any) => ({
       id: args.where.id,
       name: "Plan detail",
       form: { id: "form-1" },
       assignments: [],
     }),
-    count: async (args: any) => {
-      if (!args.where.assignments) return 3;
+    count: async (args: any = {}) => {
+      if (!args.where?.assignments) return auditPlans.length;
       return 1;
     },
+  });
+  setPrismaModel("brand", {
+    count: async () => brands.length,
+    findMany: async (args: any) => paginateRows(brands, args),
+  });
+  setPrismaModel("user", {
+    count: async () => users.length,
+    findMany: async (args: any) => paginateRows(users, args),
+  });
+  setPrismaModel("criteria", {
+    count: async (args: any = {}) =>
+      criteria.filter((item) => matchesWhere(item, args.where)).length,
+    findMany: async (args: any) =>
+      paginateRows(criteria.filter((item) => matchesWhere(item, args.where)), args),
+  });
+  setPrismaModel("checklistForm", {
+    count: async () => checklistForms.length,
+    findMany: async (args: any) => paginateRows(checklistForms, args),
   });
   setPrismaModel("auditAssignment", {
     count: async (args: any) => {
@@ -526,6 +600,47 @@ const tests: TestCase[] = [
       assert.equal(getReviewedActionPlanStatus("reject"), "rejected");
       assert.equal(isActionPlanClosedByReview("confirm"), true);
       assert.equal(isActionPlanClosedByReview("reject"), false);
+    },
+  },
+  {
+    name: "pagination: mac dinh page 1 limit 20",
+    run: () => {
+      const params = getPaginationParams(new URLSearchParams());
+
+      assert.deepEqual(params, { page: 1, limit: 20, skip: 0, take: 20 });
+    },
+  },
+  {
+    name: "pagination: query khong hop le fallback ve mac dinh",
+    run: () => {
+      const params = getPaginationParams(new URLSearchParams("page=-1&limit=abc"));
+
+      assert.deepEqual(params, { page: 1, limit: 20, skip: 0, take: 20 });
+    },
+  },
+  {
+    name: "pagination: limit bi cap toi da 100 va tinh skip",
+    run: () => {
+      const params = getPaginationParams(new URLSearchParams("page=3&limit=999"));
+
+      assert.deepEqual(params, { page: 3, limit: 100, skip: 200, take: 100 });
+    },
+  },
+  {
+    name: "pagination: meta tinh totalPages dung",
+    run: () => {
+      assert.deepEqual(getPaginationMeta({ page: 1, limit: 20 }, 0), {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      });
+      assert.deepEqual(getPaginationMeta({ page: 2, limit: 20 }, 41), {
+        page: 2,
+        limit: 20,
+        total: 41,
+        totalPages: 3,
+      });
     },
   },
   {
@@ -785,6 +900,26 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 200);
       assert.deepEqual(body.data.map((audit: any) => audit.id), ["audit-own"]);
+      assert.deepEqual(body.meta, { page: 1, limit: 20, total: 1, totalPages: 1 });
+    },
+  },
+  {
+    name: "route: audit list tra pagination meta theo query",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/audits/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+          url: "http://localhost/api/audits?page=2&limit=2",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.length, 2);
+      assert.deepEqual(body.meta, { page: 2, limit: 2, total: 4, totalPages: 2 });
     },
   },
   {
@@ -806,6 +941,7 @@ const tests: TestCase[] = [
         body.data.map((audit: any) => audit.id).sort(),
         ["audit-own-sm", "audit-sm"]
       );
+      assert.deepEqual(body.meta, { page: 1, limit: 20, total: 2, totalPages: 1 });
     },
   },
   {
@@ -824,6 +960,7 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 200);
       assert.deepEqual(body.data.map((audit: any) => audit.id), ["audit-own"]);
+      assert.deepEqual(body.meta, { page: 1, limit: 20, total: 1, totalPages: 1 });
     },
   },
   {
@@ -857,6 +994,47 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 200);
       assert.deepEqual(body.data.map((actionPlan: any) => actionPlan.id), ["ap-sm"]);
+      assert.deepEqual(body.meta, { page: 1, limit: 20, total: 1, totalPages: 1 });
+      assert.equal(body.data[0].store.name, "Store SM");
+      assert.equal(body.data[0].audit.grade, "good");
+    },
+  },
+  {
+    name: "route: action plan list filter status co pagination meta",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/action-plans/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+          url: "http://localhost/api/action-plans?status=draft&page=1&limit=1",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.deepEqual(body.meta, { page: 1, limit: 1, total: 2, totalPages: 2 });
+    },
+  },
+  {
+    name: "route: action plan list ngoai store scope tra meta rong",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/action-plans/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "sm-1",
+          roles: ["store_manager"],
+          url: "http://localhost/api/action-plans?storeId=store-other&page=2&limit=5",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(body.data, []);
+      assert.deepEqual(body.meta, { page: 2, limit: 5, total: 0, totalPages: 0 });
     },
   },
   {
@@ -918,6 +1096,111 @@ const tests: TestCase[] = [
       assert.equal(body.data.openAuditPlans, 1);
       assert.equal(body.data.pendingActionPlans, 1);
       assert.deepEqual(body.data.recentAudits.map((audit: any) => audit.id), ["audit-sm"]);
+    },
+  },
+  {
+    name: "route: audit plans list co pagination meta va checklist display fields",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/audit-plans/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+          url: "http://localhost/api/audit-plans?page=1&limit=1",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.length, 1);
+      assert.deepEqual(body.meta, { page: 1, limit: 1, total: 2, totalPages: 2 });
+      assert.deepEqual(Object.keys(body.data[0].form).sort(), ["id", "name", "status", "version"]);
+    },
+  },
+  {
+    name: "route: stores list co pagination meta va relation display fields",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/stores/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "admin-1",
+          roles: ["company_admin"],
+          url: "http://localhost/api/stores?page=1&limit=2",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(body.meta, { page: 1, limit: 2, total: 3, totalPages: 2 });
+      assert.equal(body.data[0].brand.name, "Maycha");
+      assert.equal(body.data[0].manager.fullName, "SM One");
+    },
+  },
+  {
+    name: "route: stores list filter brand va active count dung where",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/stores/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "admin-1",
+          roles: ["company_admin"],
+          url: "http://localhost/api/stores?brandId=brand-1&isActive=true",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(body.data.map((store: any) => store.id), ["store-sm"]);
+      assert.deepEqual(body.meta, { page: 1, limit: 20, total: 1, totalPages: 1 });
+    },
+  },
+  {
+    name: "route: users list co pagination meta va khong tra password",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/users/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "admin-1",
+          roles: ["company_admin"],
+          url: "http://localhost/api/users?page=1&limit=1",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(body.meta, { page: 1, limit: 1, total: 2, totalPages: 2 });
+      assert.equal(body.data[0].fullName, "User One");
+      assert.equal("password" in body.data[0], false);
+    },
+  },
+  {
+    name: "route: brands criteria checklists list co pagination meta",
+    run: async () => {
+      setupRoutePrisma();
+      const brandRoute = await import("../src/app/api/brands/route");
+      const criteriaRoute = await import("../src/app/api/criteria/route");
+      const checklistRoute = await import("../src/app/api/checklists/route");
+
+      const brandBody = await responseJson(await brandRoute.GET(
+        fakeRouteRequest({ userId: "qam-1", roles: ["qa_manager"], url: "http://localhost/api/brands?limit=1" })
+      ));
+      const criteriaBody = await responseJson(await criteriaRoute.GET(
+        fakeRouteRequest({ userId: "qam-1", roles: ["qa_manager"], url: "http://localhost/api/criteria?groupId=group-c&limit=1" })
+      ));
+      const checklistBody = await responseJson(await checklistRoute.GET(
+        fakeRouteRequest({ userId: "qam-1", roles: ["qa_manager"], url: "http://localhost/api/checklists?limit=1" })
+      ));
+
+      assert.deepEqual(brandBody.meta, { page: 1, limit: 1, total: 2, totalPages: 2 });
+      assert.deepEqual(criteriaBody.meta, { page: 1, limit: 1, total: 2, totalPages: 2 });
+      assert.deepEqual(checklistBody.meta, { page: 1, limit: 1, total: 2, totalPages: 2 });
+      assert.equal(criteriaBody.data[0].group.weight, 0.3);
+      assert.equal(checklistBody.data[0]._count.sections, 2);
+      assert.equal("sections" in checklistBody.data[0], false);
     },
   },
 ];

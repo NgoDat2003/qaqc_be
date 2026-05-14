@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 import { z } from "zod";
 
 /**
@@ -34,6 +35,7 @@ export async function GET(request: NextRequest) {
     if (forbidden) return forbidden;
 
     const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
     const brandId = searchParams.get("brandId");
     const isActiveParam = searchParams.get("isActive");
 
@@ -43,17 +45,34 @@ export async function GET(request: NextRequest) {
       where.isActive = isActiveParam === "true";
     }
 
-    const stores = await prisma.store.findMany({
-      where,
-      include: {
-        brand: { select: { id: true, code: true, name: true } },
-        am: { select: { id: true, fullName: true, email: true } },
-        manager: { select: { id: true, fullName: true, email: true } },
-      },
-      orderBy: { code: "asc" },
-    });
+    const [total, stores] = await prisma.$transaction([
+      prisma.store.count({ where }),
+      prisma.store.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          modelType: true,
+          region: true,
+          province: true,
+          district: true,
+          ward: true,
+          address: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          brand: { select: { id: true, code: true, name: true } },
+          am: { select: { id: true, fullName: true, email: true } },
+          manager: { select: { id: true, fullName: true, email: true } },
+        },
+        orderBy: { code: "asc" },
+      }),
+    ]);
 
-    return response.success(stores);
+    return response.success(stores, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("[GET /api/stores] Error:", error);
     return response.error("Internal server error", 500);

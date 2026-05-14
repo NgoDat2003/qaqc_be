@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 import { z } from "zod";
 
 const createCriteriaSchema = z.object({
@@ -22,17 +23,33 @@ export async function GET(request: NextRequest) {
     if (forbidden) return forbidden;
 
     const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
     const groupId = searchParams.get("groupId");
+    const where = groupId ? { groupId } : {};
 
-    const criteria = await prisma.criteria.findMany({
-      where: groupId ? { groupId } : {},
-      include: {
-        group: { select: { name: true, code: true } }
-      },
-      orderBy: { code: "asc" }
-    });
+    const [total, criteria] = await prisma.$transaction([
+      prisma.criteria.count({ where }),
+      prisma.criteria.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          code: true,
+          content: true,
+          deductionPerError: true,
+          maxDeduction: true,
+          flag: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          group: { select: { id: true, name: true, code: true, weight: true } },
+        },
+        orderBy: { code: "asc" }
+      }),
+    ]);
 
-    return response.success(criteria);
+    return response.success(criteria, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("[GET /api/criteria] Error:", error);
     return response.error("Internal server error", 500);

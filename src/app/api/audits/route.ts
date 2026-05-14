@@ -6,6 +6,7 @@ import {
   getReadableStoreIds,
   getRequestUser,
 } from "@/lib/scope";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 
 export async function GET(request: NextRequest) {
   try {
@@ -13,6 +14,7 @@ export async function GET(request: NextRequest) {
     if (!user) return response.unauthorized();
 
     const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
     const storeId = searchParams.get("storeId");
 
     const where: any = {};
@@ -34,26 +36,39 @@ export async function GET(request: NextRequest) {
             ];
           }
         } else {
-          if (storeId && !readableStoreIds.includes(storeId)) return response.success([]);
+          if (storeId && !readableStoreIds.includes(storeId)) {
+            return response.success([], undefined, getPaginationMeta(pagination, 0));
+          }
           if (!storeId) where.storeId = { in: readableStoreIds };
         }
       } else if (canReadOwnAudits(user.roles)) {
         where.auditorId = user.userId;
       } else {
-        return response.success([]);
+        return response.success([], undefined, getPaginationMeta(pagination, 0));
       }
     }
 
-    const audits = await prisma.audit.findMany({
-      where,
-      include: {
-        store: { select: { id: true, name: true, code: true } },
-        assignment: { select: { plan: { select: { name: true } } } },
-      },
-      orderBy: { submittedAt: "desc" },
-    });
+    const [total, audits] = await prisma.$transaction([
+      prisma.audit.count({ where }),
+      prisma.audit.findMany({
+        where,
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          finalScore: true,
+          grade: true,
+          isRiskTriggered: true,
+          submittedAt: true,
+          createdAt: true,
+          store: { select: { id: true, name: true, code: true } },
+          assignment: { select: { plan: { select: { id: true, name: true } } } },
+        },
+        orderBy: { submittedAt: "desc" },
+      }),
+    ]);
 
-    return response.success(audits);
+    return response.success(audits, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("GET Audits List Error:", error);
     return response.error("Internal server error", 500);

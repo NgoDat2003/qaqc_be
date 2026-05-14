@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 
@@ -30,17 +31,31 @@ export async function GET(request: NextRequest) {
     const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
 
-    const users = await prisma.user.findMany({
-      include: {
-        roleAssignments: true,
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
 
-    // Security: Remove passwords from output
-    const safeUsers = users.map(({ password, ...user }) => user);
+    const [total, users] = await prisma.$transaction([
+      prisma.user.count(),
+      prisma.user.findMany({
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          phone: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          roleAssignments: {
+            select: { id: true, roleKey: true, storeId: true },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
     
-    return response.success(safeUsers);
+    return response.success(users, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("[GET /api/users] Error:", error);
     return response.error("Internal server error", 500);

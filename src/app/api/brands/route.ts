@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
 import { z } from "zod";
 
 /**
@@ -30,16 +31,30 @@ export async function GET(request: NextRequest) {
     const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
 
-    const brands = await prisma.brand.findMany({
-      include: {
-        _count: {
-          select: { stores: true }
-        }
-      },
-      orderBy: { name: "asc" },
-    });
+    const { searchParams } = new URL(request.url);
+    const pagination = getPaginationParams(searchParams);
 
-    return response.success(brands);
+    const [total, brands] = await prisma.$transaction([
+      prisma.brand.count(),
+      prisma.brand.findMany({
+        skip: pagination.skip,
+        take: pagination.take,
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          _count: {
+            select: { stores: true }
+          }
+        },
+        orderBy: { name: "asc" },
+      }),
+    ]);
+
+    return response.success(brands, undefined, getPaginationMeta(pagination, total));
   } catch (error) {
     console.error("[GET /api/brands] Error:", error);
     return response.error("Internal server error", 500);
