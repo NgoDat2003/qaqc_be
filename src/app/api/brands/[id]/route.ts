@@ -2,55 +2,55 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
-import { z } from "zod";
+import { brandSelect, brandUpdateSchema, getValidationMessage } from "@/lib/admin";
+import { invalidateAdminCache } from "@/lib/admin-cache";
 
-const updateBrandSchema = z.object({
-  name: z.string().min(2, "Brand name must be at least 2 characters").max(100).optional(),
-  isActive: z.boolean().optional(),
-});
-
-/**
- * PATCH /api/brands/[id]
- * Update brand details.
- * Accessible by: company_admin only
- */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const forbidden = requireRole(request, ["company_admin"]);
+  if (forbidden) return forbidden;
+
   try {
-    const forbidden = requireRole(request, ["company_admin"]);
-    if (forbidden) return forbidden;
-
-    const id = params.id;
-    const body = await request.json();
-    const parsed = updateBrandSchema.safeParse(body);
-
+    const parsed = brandUpdateSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return response.error(parsed.error.errors[0].message, 400);
+      return response.error(getValidationMessage(parsed.error), 400);
     }
 
-    const brand = await prisma.brand.findUnique({ where: { id } });
-    if (!brand) {
+    const currentBrand = await prisma.brand.findUnique({
+      where: { id: params.id },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    if (!currentBrand) {
       return response.error("Brand not found", 404);
     }
 
-    // If name is changing, check for duplicates
-    if (parsed.data.name && parsed.data.name !== brand.name) {
-      const existing = await prisma.brand.findUnique({
-        where: { name: parsed.data.name }
+    if (parsed.data.name && parsed.data.name !== currentBrand.name) {
+      const duplicate = await prisma.brand.findUnique({
+        where: { name: parsed.data.name },
+        select: { id: true },
       });
-      if (existing) return response.error("Brand name already exists", 400);
+
+      if (duplicate) {
+        return response.error("Brand name already exists", 400);
+      }
     }
 
-    const updated = await prisma.brand.update({
-      where: { id },
+    const brand = await prisma.brand.update({
+      where: { id: params.id },
       data: parsed.data,
+      select: brandSelect,
     });
 
-    return response.success(updated, "Brand updated successfully");
+    invalidateAdminCache("brands:");
+    return response.success(brand, "Brand updated successfully");
   } catch (error) {
-    console.error("[PATCH /api/brands/[id]] Error:", error);
+    console.error("Update brand error:", error);
     return response.error("Internal server error", 500);
   }
 }

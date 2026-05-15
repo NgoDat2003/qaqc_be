@@ -1,7 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
-import { withServerTiming } from "@/lib/server-timing";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +8,6 @@ export const dynamic = "force-dynamic";
 // Middleware has already verified the JWT and injected x-user-id / x-user-roles headers.
 // This endpoint fetches fresh user data from DB to ensure consistency.
 export async function GET(request: NextRequest) {
-  const startedAt = performance.now();
-
   try {
     const userId = request.headers.get("x-user-id");
     const roleKeysRaw = request.headers.get("x-user-roles");
@@ -27,7 +24,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch latest user info from DB (not just from JWT)
-    const lookupStartedAt = performance.now();
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -40,7 +36,6 @@ export async function GET(request: NextRequest) {
         },
       },
     });
-    const lookupDuration = performance.now() - lookupStartedAt;
 
     if (!user || !user.isActive) {
       return response.unauthorized("Account inactive or not found");
@@ -50,7 +45,7 @@ export async function GET(request: NextRequest) {
     const freshRoles = user.roleAssignments.map((r) => r.roleKey);
     const freshActiveRole = freshRoles.length > 0 ? freshRoles[0] : "";
 
-    return withServerTiming(response.success({
+    return response.success({
       user: {
         id: user.id,
         email: user.email,
@@ -58,10 +53,7 @@ export async function GET(request: NextRequest) {
       },
       activeRole: freshActiveRole,
       availableRoles: freshRoles,
-    }), [
-      { name: "lookup", durationMs: lookupDuration, description: "User lookup" },
-      { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
-    ]);
+    });
   } catch (error) {
     console.error("Get ME error:", error);
     return response.error("Internal server error", 500);

@@ -2,128 +2,83 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
-import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
+import { brandCreateSchema, brandSelect, getValidationMessage } from "@/lib/admin";
+import { invalidateAdminCache, readAdminCache } from "@/lib/admin-cache";
 import { withServerTiming } from "@/lib/server-timing";
-import { z } from "zod";
 
-export const dynamic = "force-dynamic";
-
-/**
- * @skill zod-validation-expert
- * Schema for creating a brand.
- * - code: Unique identifier (e.g., 'MC', 'BO')
- * - name: Display name (e.g., 'Maycha', 'Bò Lế Rồ')
- */
-const createBrandSchema = z.object({
-  code: z.string()
-    .min(2, "Brand code must be at least 2 characters")
-    .max(10, "Brand code too long")
-    .toUpperCase(),
-  name: z.string()
-    .min(2, "Brand name must be at least 2 characters")
-    .max(100, "Brand name too long"),
-});
-
-/**
- * GET /api/brands
- * List all brands.
- * Accessible by: company_admin, qa_manager
- */
 export async function GET(request: NextRequest) {
   const startedAt = performance.now();
+  const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
+  if (forbidden) return forbidden;
 
   try {
-    const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
-    if (forbidden) return forbidden;
-
-    const { searchParams } = new URL(request.url);
-    const pagination = getPaginationParams(searchParams);
-
-    let countDuration = 0;
-    let rowsDuration = 0;
     const dbStartedAt = performance.now();
-    const countStartedAt = performance.now();
-    const totalPromise = prisma.brand.count().finally(() => {
-      countDuration = performance.now() - countStartedAt;
-    });
-    const rowsStartedAt = performance.now();
-    const brandsPromise = prisma.brand.findMany({
-        skip: pagination.skip,
-        take: pagination.take,
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          isActive: true,
-          createdAt: true,
-          updatedAt: true,
-          _count: {
-            select: { stores: true }
-          }
-        },
+    const { value: brands, cacheHit } = await readAdminCache("brands:list", () =>
+      prisma.brand.findMany({
+        select: brandSelect,
         orderBy: { name: "asc" },
-      }).finally(() => {
-      rowsDuration = performance.now() - rowsStartedAt;
-    });
-    const [total, brands] = await Promise.all([totalPromise, brandsPromise]);
+      })
+    );
     const dbDuration = performance.now() - dbStartedAt;
 
-    return withServerTiming(
-      response.success(brands, undefined, getPaginationMeta(pagination, total)),
-      [
-        { name: "count", durationMs: countDuration, description: "Prisma count query" },
-        { name: "rows", durationMs: rowsDuration, description: "Prisma rows query" },
-        { name: "db", durationMs: dbDuration, description: "Prisma list queries" },
-        { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
-      ]
-    );
+    return withServerTiming(response.success(brands), [
+      {
+        name: cacheHit ? "cache" : "db",
+        durationMs: dbDuration,
+        description: cacheHit ? "Admin cache hit" : "Prisma query",
+      },
+      {
+        name: "total",
+        durationMs: performance.now() - startedAt,
+        description: "Route handler",
+      },
+    ]);
   } catch (error) {
-    console.error("[GET /api/brands] Error:", error);
+    console.error("Get brands error:", error);
     return response.error("Internal server error", 500);
   }
 }
 
-/**
- * POST /api/brands
- * Create a new brand.
- * Accessible by: company_admin only
- */
 export async function POST(request: NextRequest) {
+  const forbidden = requireRole(request, ["company_admin"]);
+  if (forbidden) return forbidden;
+
   try {
-    const forbidden = requireRole(request, ["company_admin"]);
-    if (forbidden) return forbidden;
-
-    const body = await request.json();
-    const parsed = createBrandSchema.safeParse(body);
-
+    const parsed = brandCreateSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return response.error(parsed.error.errors[0].message, 400);
+      return response.error(getValidationMessage(parsed.error), 400);
     }
 
-    const { code, name } = parsed.data;
-
-    // Check for existing brand
-    const existing = await prisma.brand.findFirst({
+    const existingBrand = await prisma.brand.findFirst({
       where: {
         OR: [
-          { code },
-          { name }
-        ]
-      }
+          { code: parsed.data.code },
+          { name: parsed.data.name },
+        ],
+      },
+      select: {
+        code: true,
+        name: true,
+      },
     });
 
-    if (existing) {
-      const field = existing.code === code ? "code" : "name";
-      return response.error(`Brand ${field} already exists`, 400);
+    if (existingBrand?.code === parsed.data.code) {
+      return response.error("Brand code already exists", 400);
+    }
+
+    if (existingBrand?.name === parsed.data.name) {
+      return response.error("Brand name already exists", 400);
     }
 
     const brand = await prisma.brand.create({
-      data: { code, name },
+      data: parsed.data,
+      select: brandSelect,
     });
 
+    invalidateAdminCache("brands:");
     return response.created(brand, "Brand created successfully");
   } catch (error) {
-    console.error("[POST /api/brands] Error:", error);
+    console.error("Create brand error:", error);
     return response.error("Internal server error", 500);
   }
 }

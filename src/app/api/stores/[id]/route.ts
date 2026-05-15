@@ -2,158 +2,106 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
-import { withServerTiming } from "@/lib/server-timing";
-import { z } from "zod";
+import {
+  getValidationMessage,
+  storeDetailSelect,
+  storeUpdateSchema,
+} from "@/lib/admin";
+import {
+  activeUserHasRole,
+  isBrandCompatibleWithModelType,
+} from "@/lib/admin-db";
+import { invalidateAdminCache } from "@/lib/admin-cache";
 
-const updateStoreSchema = z.object({
-  code: z.string().min(2).toUpperCase().optional(),
-  name: z.string().min(2).optional(),
-  modelType: z.enum(["standard", "cloud_kitchen"]).optional(),
-  brandId: z.string().optional(),
-  region: z.string().optional().nullable(),
-  province: z.string().optional().nullable(),
-  district: z.string().optional().nullable(),
-  ward: z.string().optional().nullable(),
-  address: z.string().optional().nullable(),
-  managerId: z.string().optional().nullable(),
-  isActive: z.boolean().optional(),
-});
-
-/**
- * GET /api/stores/[id]
- * Return full store detail for row drill-down screens.
- */
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const startedAt = performance.now();
+  const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
+  if (forbidden) return forbidden;
 
   try {
-    const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
-    if (forbidden) return forbidden;
-
-    const lookupStartedAt = performance.now();
     const store = await prisma.store.findUnique({
       where: { id: params.id },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        modelType: true,
-        region: true,
-        province: true,
-        district: true,
-        ward: true,
-        address: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        brand: { select: { id: true, code: true, name: true } },
-        am: { select: { id: true, fullName: true, email: true } },
-        manager: { select: { id: true, fullName: true, email: true } },
-      },
+      select: storeDetailSelect,
     });
-    const lookupDuration = performance.now() - lookupStartedAt;
 
-    if (!store) return response.error("Store not found", 404);
+    if (!store) {
+      return response.error("Store not found", 404);
+    }
 
-    return withServerTiming(response.success(store), [
-      { name: "lookup", durationMs: lookupDuration, description: "Store detail query" },
-      { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
-    ]);
+    return response.success(store);
   } catch (error) {
-    console.error("[GET /api/stores/[id]] Error:", error);
+    console.error("Get store error:", error);
     return response.error("Internal server error", 500);
   }
 }
 
-/**
- * PATCH /api/stores/[id]
- * Update store details.
- * Rule: Apply Brand Isolation if modelType or brandId changes.
- */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const forbidden = requireRole(request, ["company_admin"]);
+  if (forbidden) return forbidden;
+
   try {
-    const forbidden = requireRole(request, ["company_admin"]);
-    if (forbidden) return forbidden;
-
-    const id = params.id;
-    const body = await request.json();
-    const parsed = updateStoreSchema.safeParse(body);
-
+    const parsed = storeUpdateSchema.safeParse(await request.json());
     if (!parsed.success) {
-      return response.error(parsed.error.errors[0].message, 400);
+      return response.error(getValidationMessage(parsed.error), 400);
     }
 
-    const currentStore = await prisma.store.findUnique({ where: { id } });
-    if (!currentStore) return response.error("Store not found", 404);
-
-    const updateData: any = { ...parsed.data };
-
-    // 1. Check duplicate code
-    if (updateData.code && updateData.code !== currentStore.code) {
-      const existing = await prisma.store.findUnique({ where: { code: updateData.code } });
-      if (existing) return response.error("Store code already exists", 400);
-    }
-
-    // 2. Brand Isolation Logic
-    const finalModelType = updateData.modelType || currentStore.modelType;
-    const finalBrandId = updateData.brandId || currentStore.brandId;
-
-    if (updateData.modelType || updateData.brandId) {
-      const brand = await prisma.brand.findUnique({ where: { id: finalBrandId } });
-      if (!brand) return response.error("Brand not found", 404);
-
-      const isCloudBrand = brand.code.toUpperCase() === "CLOUD";
-
-      if (finalModelType === "standard" && isCloudBrand) {
-        return response.error("Standard stores cannot be assigned to the CLOUD brand", 400);
-      }
-      if (finalModelType === "cloud_kitchen" && !isCloudBrand) {
-        return response.error("Cloud Kitchen stores must be assigned to the CLOUD brand", 400);
-      }
-    }
-
-    // 3. Manager Validation
-    if (updateData.managerId && updateData.managerId !== currentStore.managerId) {
-      const manager = await prisma.user.findUnique({
-        where: { id: updateData.managerId },
-        include: { roleAssignments: true }
-      });
-      if (!manager) return response.error("Manager user not found", 404);
-      const hasManagerRole = manager.roleAssignments.some(r => r.roleKey === "store_manager");
-      if (!hasManagerRole) return response.error("Selected user is not a Store Manager", 400);
-    }
-
-    const updated = await prisma.store.update({
-      where: { id },
-      data: updateData,
+    const currentStore = await prisma.store.findUnique({
+      where: { id: params.id },
       select: {
         id: true,
-        code: true,
-        name: true,
         modelType: true,
-        region: true,
-        province: true,
-        district: true,
-        ward: true,
-        address: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        brand: { select: { id: true, code: true, name: true } },
-        manager: { select: { id: true, fullName: true, email: true } },
-        am: { select: { id: true, fullName: true, email: true } }
-      }
+        brandId: true,
+      },
     });
 
-    return response.success(updated, "Store updated successfully");
+    if (!currentStore) {
+      return response.error("Store not found", 404);
+    }
+
+    const nextBrandId = parsed.data.brandId ?? currentStore.brandId;
+    const nextModelType = parsed.data.modelType ?? currentStore.modelType;
+
+    const brand = await prisma.brand.findUnique({
+      where: { id: nextBrandId },
+      select: { id: true, code: true },
+    });
+
+    if (!brand) {
+      return response.error("Brand not found", 404);
+    }
+
+    if (!isBrandCompatibleWithModelType(brand.code, nextModelType)) {
+      return nextModelType === "standard"
+        ? response.error("Standard stores cannot use the CLOUD brand", 400)
+        : response.error("Cloud Kitchen must use the CLOUD brand", 400);
+    }
+
+    if (parsed.data.amId && !(await activeUserHasRole(parsed.data.amId, "am"))) {
+      return response.error("AM user must be active and have am role", 400);
+    }
+
+    if (
+      parsed.data.managerId &&
+      !(await activeUserHasRole(parsed.data.managerId, "store_manager"))
+    ) {
+      return response.error("Manager user must be active and have store_manager role", 400);
+    }
+
+    const store = await prisma.store.update({
+      where: { id: params.id },
+      data: parsed.data,
+      select: storeDetailSelect,
+    });
+
+    invalidateAdminCache("stores:", "brands:", "users:");
+    return response.success(store, "Store updated successfully");
   } catch (error) {
-    console.error("[PATCH /api/stores/[id]] Error:", error);
+    console.error("Update store error:", error);
     return response.error("Internal server error", 500);
   }
 }
