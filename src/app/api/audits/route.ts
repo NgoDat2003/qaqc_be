@@ -7,8 +7,13 @@ import {
   getRequestUser,
 } from "@/lib/scope";
 import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
+import { withServerTiming } from "@/lib/server-timing";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const startedAt = performance.now();
+
   try {
     const user = getRequestUser(request);
     if (!user) return response.unauthorized();
@@ -48,9 +53,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const [total, audits] = await prisma.$transaction([
-      prisma.audit.count({ where }),
-      prisma.audit.findMany({
+    let countDuration = 0;
+    let rowsDuration = 0;
+    const dbStartedAt = performance.now();
+    const countStartedAt = performance.now();
+    const totalPromise = prisma.audit.count({ where }).finally(() => {
+      countDuration = performance.now() - countStartedAt;
+    });
+    const rowsStartedAt = performance.now();
+    const auditsPromise = prisma.audit.findMany({
         where,
         skip: pagination.skip,
         take: pagination.take,
@@ -62,13 +73,23 @@ export async function GET(request: NextRequest) {
           submittedAt: true,
           createdAt: true,
           store: { select: { id: true, name: true, code: true } },
-          assignment: { select: { plan: { select: { id: true, name: true } } } },
         },
         orderBy: { submittedAt: "desc" },
-      }),
-    ]);
+      }).finally(() => {
+      rowsDuration = performance.now() - rowsStartedAt;
+    });
+    const [total, audits] = await Promise.all([totalPromise, auditsPromise]);
+    const dbDuration = performance.now() - dbStartedAt;
 
-    return response.success(audits, undefined, getPaginationMeta(pagination, total));
+    return withServerTiming(
+      response.success(audits, undefined, getPaginationMeta(pagination, total)),
+      [
+        { name: "count", durationMs: countDuration, description: "Prisma count query" },
+        { name: "rows", durationMs: rowsDuration, description: "Prisma rows query" },
+        { name: "db", durationMs: dbDuration, description: "Prisma list queries" },
+        { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+      ]
+    );
   } catch (error) {
     console.error("GET Audits List Error:", error);
     return response.error("Internal server error", 500);

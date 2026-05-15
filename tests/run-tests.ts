@@ -26,6 +26,8 @@ import {
 import { getPaginationMeta, getPaginationParams } from "../src/lib/pagination";
 import { prisma } from "../src/lib/prisma";
 import { calculateAuditScore, CriteriaInput, GroupWeight } from "../src/lib/scoring";
+import { response } from "../src/lib/api-response";
+import { withServerTiming } from "../src/lib/server-timing";
 
 const originalResolveFilename = (Module as any)._resolveFilename;
 (Module as any)._resolveFilename = function resolveAlias(
@@ -228,7 +230,16 @@ function matchesWhere(record: any, where: any): boolean {
     if (where.storeId.in && !where.storeId.in.includes(record.storeId)) return false;
   }
   if (where.auditorId && record.auditorId !== where.auditorId) return false;
-  if (where.status && record.status !== where.status) return false;
+  if (where.status) {
+    if (typeof where.status === "string" && record.status !== where.status) return false;
+    if (where.status.in && !where.status.in.includes(record.status)) return false;
+    if (where.status.not && record.status === where.status.not) return false;
+  }
+  if (where.deadline?.lt && !(record.deadline < where.deadline.lt)) return false;
+  if (where.submittedAt) {
+    if (where.submittedAt.gte && !(record.submittedAt >= where.submittedAt.gte)) return false;
+    if (where.submittedAt.lte && !(record.submittedAt <= where.submittedAt.lte)) return false;
+  }
 
   return true;
 }
@@ -237,6 +248,30 @@ function paginateRows<T>(rows: T[], args: any): T[] {
   const skip = args.skip || 0;
   const take = args.take ?? rows.length;
   return rows.slice(skip, skip + take);
+}
+
+function applySelect(record: any, select: any): any {
+  if (!select) return record;
+
+  return Object.fromEntries(
+    Object.entries(select).flatMap(([key, value]) => {
+      if (!value) return [];
+      const field = record[key];
+
+      if (value === true) return [[key, field]];
+      if (field === null || field === undefined) return [[key, field]];
+      if (typeof value === "object" && "select" in value) {
+        return [[
+          key,
+          Array.isArray(field)
+            ? field.map((item) => applySelect(item, value.select))
+            : applySelect(field, value.select),
+        ]];
+      }
+
+      return [[key, field]];
+    })
+  );
 }
 
 function setupRoutePrisma() {
@@ -287,6 +322,7 @@ function setupRoutePrisma() {
       const stores = fixtures.stores
         .filter((store) => {
           if (where.brandId || where.isActive !== undefined) return matchesWhere(store, where);
+          if (where.id?.in) return where.id.in.includes(store.id);
           if (where.amId) return store.amId === where.amId;
           if (where.managerId) return store.managerId === where.managerId;
           if (where.OR) {
@@ -304,11 +340,30 @@ function setupRoutePrisma() {
           name: store.name,
           code: store.code,
           brand: { id: "brand-1", code: "MC", name: "Maycha" },
-          am: { id: "am-1", fullName: "AM One", email: "am@example.com" },
-          manager: { id: "sm-1", fullName: "SM One", email: "sm@example.com" },
-        }));
+          am: { id: "am-1", fullName: "AM One" },
+          manager: { id: "sm-1", fullName: "SM One" },
+        }))
+        .map((store) => applySelect(store, args.select));
 
       return paginateRows(stores, args);
+    },
+    findUnique: async (args: any) => {
+      const store = fixtures.stores.find((item) => item.id === args.where.id);
+      if (!store) return null;
+      return {
+        ...store,
+        modelType: "standard",
+        region: "Mien Nam",
+        province: "HCM",
+        district: "Q1",
+        ward: "Ben Nghe",
+        address: "1 Nguyen Hue",
+        createdAt: new Date("2026-01-01"),
+        updatedAt: new Date("2026-01-02"),
+        brand: { id: "brand-1", code: "MC", name: "Maycha" },
+        am: { id: "am-1", fullName: "AM One", email: "am@example.com" },
+        manager: { id: "sm-1", fullName: "SM One", email: "sm@example.com" },
+      };
     },
   });
   setPrismaModel("audit", {
@@ -321,7 +376,8 @@ function setupRoutePrisma() {
         .map((audit) => ({
           ...audit,
           assignment: { plan: { name: "Plan 1" } },
-        })),
+        }))
+        .map((audit) => applySelect(audit, args.select)),
         args
       ),
     findUnique: async (args: any) => {
@@ -334,12 +390,45 @@ function setupRoutePrisma() {
         assignment: { plan: { form: { id: "form-1" } } },
       };
     },
+    aggregate: async (args: any) => {
+      const audits = fixtures.audits.filter((audit) => matchesWhere(audit, args.where));
+      const total = audits.reduce((sum, audit) => sum + audit.finalScore, 0);
+      return { _avg: { finalScore: audits.length > 0 ? total / audits.length : null } };
+    },
+    groupBy: async (args: any) => {
+      const audits = fixtures.audits.filter((audit) => matchesWhere(audit, args.where));
+      if (args.by.includes("grade")) {
+        return Array.from(
+          audits.reduce((groups, audit) => {
+            groups.set(audit.grade, (groups.get(audit.grade) || 0) + 1);
+            return groups;
+          }, new Map<string, number>())
+        ).map(([grade, count]) => ({ grade, _count: { _all: count } }));
+      }
+      return Array.from(
+        audits.reduce((groups, audit) => {
+          const current = groups.get(audit.storeId) || { total: 0, count: 0 };
+          current.total += audit.finalScore;
+          current.count += 1;
+          groups.set(audit.storeId, current);
+          return groups;
+        }, new Map<string, { total: number; count: number }>())
+      ).map(([storeId, value]) => ({
+        storeId,
+        _avg: { finalScore: value.total / value.count },
+      }));
+    },
   });
   setPrismaModel("actionPlan", {
     count: async (args: any = {}) =>
       fixtures.actionPlans.filter((actionPlan) => matchesWhere(actionPlan, args.where)).length,
     findMany: async (args: any) =>
-      paginateRows(fixtures.actionPlans.filter((actionPlan) => matchesWhere(actionPlan, args.where)), args),
+      paginateRows(
+        fixtures.actionPlans
+          .filter((actionPlan) => matchesWhere(actionPlan, args.where))
+          .map((actionPlan) => applySelect(actionPlan, args.select)),
+        args
+      ),
     findUnique: async (args: any) =>
       fixtures.actionPlans.find((actionPlan) => actionPlan.id === args.where.id) || null,
     update: async (args: any) => {
@@ -375,8 +464,10 @@ function setupRoutePrisma() {
       paginateRows(criteria.filter((item) => matchesWhere(item, args.where)), args),
   });
   setPrismaModel("checklistForm", {
-    count: async () => checklistForms.length,
-    findMany: async (args: any) => paginateRows(checklistForms, args),
+    count: async (args: any = {}) =>
+      checklistForms.filter((item) => matchesWhere(item, args.where)).length,
+    findMany: async (args: any) =>
+      paginateRows(checklistForms.filter((item) => matchesWhere(item, args.where)), args),
   });
   setPrismaModel("auditAssignment", {
     count: async (args: any) => {
@@ -1136,6 +1227,27 @@ const tests: TestCase[] = [
       assert.deepEqual(body.meta, { page: 1, limit: 2, total: 3, totalPages: 2 });
       assert.equal(body.data[0].brand.name, "Maycha");
       assert.equal(body.data[0].manager.fullName, "SM One");
+      assert.equal("address" in body.data[0], false);
+      assert.equal("email" in body.data[0].manager, false);
+    },
+  },
+  {
+    name: "route: stores detail tra field day du cho row drill-down",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/stores/[id]/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "admin-1",
+          roles: ["company_admin"],
+        }),
+        { params: { id: "store-sm" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.address, "1 Nguyen Hue");
+      assert.equal(body.data.manager.email, "sm@example.com");
     },
   },
   {
@@ -1178,6 +1290,92 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "route: users list tra store display fields cho role assignment",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/users/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "admin-1",
+          roles: ["company_admin"],
+          url: "http://localhost/api/users?page=2&limit=1",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(body.data[0].roleAssignments[0].store, {
+        id: "store-sm",
+        code: "SM",
+        name: "Store SM",
+      });
+    },
+  },
+  {
+    name: "server timing: production mac dinh khong expose header debug",
+    run: () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalFlag = process.env.ENABLE_SERVER_TIMING;
+      const mutableEnv = process.env as Record<string, string | undefined>;
+      mutableEnv.NODE_ENV = "production";
+      delete process.env.ENABLE_SERVER_TIMING;
+
+      try {
+        const result = withServerTiming(response.success({ ok: true }), [
+          { name: "lookup", durationMs: 12, description: "User lookup" },
+        ]);
+        assert.equal(result.headers.get("server-timing"), null);
+      } finally {
+        mutableEnv.NODE_ENV = originalNodeEnv;
+        if (originalFlag === undefined) {
+          delete process.env.ENABLE_SERVER_TIMING;
+        } else {
+          process.env.ENABLE_SERVER_TIMING = originalFlag;
+        }
+      }
+    },
+  },
+  {
+    name: "route: audits list chi tra summary fields cho table",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/audits/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+          url: "http://localhost/api/audits?page=1&limit=1",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal("assignment" in body.data[0], false);
+      assert.equal(body.data[0].store.name, "Store SM");
+    },
+  },
+  {
+    name: "route: action plans list chi tra summary fields cho table",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/action-plans/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+          url: "http://localhost/api/action-plans?page=1&limit=1",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal("remediation" in body.data[0], false);
+      assert.equal("closedAt" in body.data[0], false);
+      assert.equal("closedBy" in body.data[0], false);
+      assert.equal(body.data[0].audit.grade, "good");
+    },
+  },
+  {
     name: "route: brands criteria checklists list co pagination meta",
     run: async () => {
       setupRoutePrisma();
@@ -1201,6 +1399,25 @@ const tests: TestCase[] = [
       assert.equal(criteriaBody.data[0].group.weight, 0.3);
       assert.equal(checklistBody.data[0]._count.sections, 2);
       assert.equal("sections" in checklistBody.data[0], false);
+    },
+  },
+  {
+    name: "route: checklists list ton trong status filter",
+    run: async () => {
+      setupRoutePrisma();
+      const route = await import("../src/app/api/checklists/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+          url: "http://localhost/api/checklists?status=published",
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.deepEqual(body.data.map((item: any) => item.id), ["form-1"]);
+      assert.deepEqual(body.meta, { page: 1, limit: 20, total: 1, totalPages: 1 });
     },
   },
 ];

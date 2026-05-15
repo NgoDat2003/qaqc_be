@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { withServerTiming } from "@/lib/server-timing";
 import { z } from "zod";
 
 const updateChecklistSchema = z.object({
@@ -10,12 +11,15 @@ const updateChecklistSchema = z.object({
 });
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+  const startedAt = performance.now();
+
   try {
     const forbidden = requireRole(request, ["company_admin", "qa_manager", "qc_auditor"]);
     if (forbidden) return forbidden;
 
     const { id } = params;
 
+    const lookupStartedAt = performance.now();
     const checklist = await prisma.checklistForm.findUnique({
       where: { id },
       include: {
@@ -33,12 +37,16 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         },
       },
     });
+    const lookupDuration = performance.now() - lookupStartedAt;
 
     if (!checklist) {
       return response.error("Checklist not found", 404);
     }
 
-    return response.success(checklist);
+    return withServerTiming(response.success(checklist), [
+      { name: "lookup", durationMs: lookupDuration, description: "Checklist detail query" },
+      { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+    ]);
   } catch (error) {
     console.error("GET Checklist Detail Error:", error);
     return response.error("Internal server error", 500);

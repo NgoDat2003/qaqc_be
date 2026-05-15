@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { withServerTiming } from "@/lib/server-timing";
 import { z } from "zod";
 
 const updateStoreSchema = z.object({
@@ -17,6 +18,55 @@ const updateStoreSchema = z.object({
   managerId: z.string().optional().nullable(),
   isActive: z.boolean().optional(),
 });
+
+/**
+ * GET /api/stores/[id]
+ * Return full store detail for row drill-down screens.
+ */
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const startedAt = performance.now();
+
+  try {
+    const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
+    if (forbidden) return forbidden;
+
+    const lookupStartedAt = performance.now();
+    const store = await prisma.store.findUnique({
+      where: { id: params.id },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        modelType: true,
+        region: true,
+        province: true,
+        district: true,
+        ward: true,
+        address: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        brand: { select: { id: true, code: true, name: true } },
+        am: { select: { id: true, fullName: true, email: true } },
+        manager: { select: { id: true, fullName: true, email: true } },
+      },
+    });
+    const lookupDuration = performance.now() - lookupStartedAt;
+
+    if (!store) return response.error("Store not found", 404);
+
+    return withServerTiming(response.success(store), [
+      { name: "lookup", durationMs: lookupDuration, description: "Store detail query" },
+      { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+    ]);
+  } catch (error) {
+    console.error("[GET /api/stores/[id]] Error:", error);
+    return response.error("Internal server error", 500);
+  }
+}
 
 /**
  * PATCH /api/stores/[id]
@@ -82,8 +132,20 @@ export async function PATCH(
     const updated = await prisma.store.update({
       where: { id },
       data: updateData,
-      include: {
-        brand: true,
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        modelType: true,
+        region: true,
+        province: true,
+        district: true,
+        ward: true,
+        address: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        brand: { select: { id: true, code: true, name: true } },
         manager: { select: { id: true, fullName: true, email: true } },
         am: { select: { id: true, fullName: true, email: true } }
       }

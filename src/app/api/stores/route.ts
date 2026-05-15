@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
 import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
+import { withServerTiming } from "@/lib/server-timing";
 import { z } from "zod";
+
+export const dynamic = "force-dynamic";
 
 /**
  * @skill zod-validation-expert
@@ -30,6 +33,8 @@ const createStoreSchema = z.object({
  * Filters: brandId, isActive
  */
 export async function GET(request: NextRequest) {
+  const startedAt = performance.now();
+
   try {
     const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
@@ -45,9 +50,15 @@ export async function GET(request: NextRequest) {
       where.isActive = isActiveParam === "true";
     }
 
-    const [total, stores] = await prisma.$transaction([
-      prisma.store.count({ where }),
-      prisma.store.findMany({
+    let countDuration = 0;
+    let rowsDuration = 0;
+    const dbStartedAt = performance.now();
+    const countStartedAt = performance.now();
+    const totalPromise = prisma.store.count({ where }).finally(() => {
+      countDuration = performance.now() - countStartedAt;
+    });
+    const rowsStartedAt = performance.now();
+    const storesPromise = prisma.store.findMany({
         where,
         skip: pagination.skip,
         take: pagination.take,
@@ -56,23 +67,29 @@ export async function GET(request: NextRequest) {
           code: true,
           name: true,
           modelType: true,
-          region: true,
-          province: true,
-          district: true,
-          ward: true,
-          address: true,
           isActive: true,
           createdAt: true,
           updatedAt: true,
           brand: { select: { id: true, code: true, name: true } },
-          am: { select: { id: true, fullName: true, email: true } },
-          manager: { select: { id: true, fullName: true, email: true } },
+          am: { select: { id: true, fullName: true } },
+          manager: { select: { id: true, fullName: true } },
         },
         orderBy: { code: "asc" },
-      }),
-    ]);
+      }).finally(() => {
+      rowsDuration = performance.now() - rowsStartedAt;
+    });
+    const [total, stores] = await Promise.all([totalPromise, storesPromise]);
+    const dbDuration = performance.now() - dbStartedAt;
 
-    return response.success(stores, undefined, getPaginationMeta(pagination, total));
+    return withServerTiming(
+      response.success(stores, undefined, getPaginationMeta(pagination, total)),
+      [
+        { name: "count", durationMs: countDuration, description: "Prisma count query" },
+        { name: "rows", durationMs: rowsDuration, description: "Prisma rows query" },
+        { name: "db", durationMs: dbDuration, description: "Prisma list queries" },
+        { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+      ]
+    );
   } catch (error) {
     console.error("[GET /api/stores] Error:", error);
     return response.error("Internal server error", 500);
@@ -137,9 +154,22 @@ export async function POST(request: NextRequest) {
         managerId,
         ...rest
       },
-      include: {
-        brand: true,
-        manager: { select: { id: true, fullName: true, email: true } }
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        modelType: true,
+        region: true,
+        province: true,
+        district: true,
+        ward: true,
+        address: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        brand: { select: { id: true, code: true, name: true } },
+        manager: { select: { id: true, fullName: true, email: true } },
+        am: { select: { id: true, fullName: true, email: true } },
       }
     });
 

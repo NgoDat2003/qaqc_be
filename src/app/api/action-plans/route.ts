@@ -4,8 +4,13 @@ import { response } from "@/lib/api-response";
 import { isActionPlanStatus } from "@/lib/action-plan-workflow";
 import { getReadableStoreIds, getRequestUser } from "@/lib/scope";
 import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
+import { withServerTiming } from "@/lib/server-timing";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
+  const startedAt = performance.now();
+
   try {
     const user = getRequestUser(request);
     if (!user) return response.unauthorized();
@@ -32,29 +37,43 @@ export async function GET(request: NextRequest) {
       if (!storeId) where.storeId = { in: readableStoreIds };
     }
 
-    const [total, actionPlans] = await prisma.$transaction([
-      prisma.actionPlan.count({ where }),
-      prisma.actionPlan.findMany({
+    let countDuration = 0;
+    let rowsDuration = 0;
+    const dbStartedAt = performance.now();
+    const countStartedAt = performance.now();
+    const totalPromise = prisma.actionPlan.count({ where }).finally(() => {
+      countDuration = performance.now() - countStartedAt;
+    });
+    const rowsStartedAt = performance.now();
+    const actionPlansPromise = prisma.actionPlan.findMany({
         where,
         skip: pagination.skip,
         take: pagination.take,
         select: {
           id: true,
           status: true,
-          remediation: true,
           deadline: true,
           createdAt: true,
           updatedAt: true,
-          closedAt: true,
           store: { select: { id: true, name: true, code: true } },
           audit: { select: { id: true, finalScore: true, grade: true, submittedAt: true } },
-          closedBy: { select: { id: true, fullName: true, email: true } },
         },
         orderBy: { createdAt: "desc" },
-      }),
-    ]);
+      }).finally(() => {
+      rowsDuration = performance.now() - rowsStartedAt;
+    });
+    const [total, actionPlans] = await Promise.all([totalPromise, actionPlansPromise]);
+    const dbDuration = performance.now() - dbStartedAt;
 
-    return response.success(actionPlans, undefined, getPaginationMeta(pagination, total));
+    return withServerTiming(
+      response.success(actionPlans, undefined, getPaginationMeta(pagination, total)),
+      [
+        { name: "count", durationMs: countDuration, description: "Prisma count query" },
+        { name: "rows", durationMs: rowsDuration, description: "Prisma rows query" },
+        { name: "db", durationMs: dbDuration, description: "Prisma list queries" },
+        { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+      ]
+    );
   } catch (error) {
     console.error("GET Action Plans Error:", error);
     return response.error("Internal server error", 500);

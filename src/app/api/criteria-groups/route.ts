@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { withServerTiming } from "@/lib/server-timing";
 import { z } from "zod";
 
 const createGroupSchema = z.object({
@@ -15,18 +16,25 @@ const createGroupSchema = z.object({
  * GET /api/criteria-groups
  */
 export async function GET(request: NextRequest) {
+  const startedAt = performance.now();
+
   try {
     const forbidden = requireRole(request, ["company_admin", "qa_manager", "qc_auditor"]);
     if (forbidden) return forbidden;
 
+    const lookupStartedAt = performance.now();
     const groups = await prisma.criteriaGroup.findMany({
       include: {
         _count: { select: { items: true } }
       },
       orderBy: { code: "asc" }
     });
+    const lookupDuration = performance.now() - lookupStartedAt;
 
-    return response.success(groups);
+    return withServerTiming(response.success(groups), [
+      { name: "lookup", durationMs: lookupDuration, description: "Criteria group query" },
+      { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+    ]);
   } catch (error) {
     console.error("[GET /api/criteria-groups] Error:", error);
     return response.error("Internal server error", 500);

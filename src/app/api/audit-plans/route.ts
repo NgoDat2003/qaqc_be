@@ -3,7 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
 import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
+import { withServerTiming } from "@/lib/server-timing";
 import { z } from "zod";
+
+export const dynamic = "force-dynamic";
 
 const createPlanSchema = z.object({
   name: z.string().min(1, "Plan name is required"),
@@ -19,6 +22,8 @@ const createPlanSchema = z.object({
  * GET /api/audit-plans
  */
 export async function GET(request: NextRequest) {
+  const startedAt = performance.now();
+
   try {
     const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
@@ -26,9 +31,15 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const pagination = getPaginationParams(searchParams);
 
-    const [total, plans] = await prisma.$transaction([
-      prisma.auditPlan.count(),
-      prisma.auditPlan.findMany({
+    let countDuration = 0;
+    let rowsDuration = 0;
+    const dbStartedAt = performance.now();
+    const countStartedAt = performance.now();
+    const totalPromise = prisma.auditPlan.count().finally(() => {
+      countDuration = performance.now() - countStartedAt;
+    });
+    const rowsStartedAt = performance.now();
+    const plansPromise = prisma.auditPlan.findMany({
         skip: pagination.skip,
         take: pagination.take,
         select: {
@@ -43,10 +54,21 @@ export async function GET(request: NextRequest) {
           _count: { select: { assignments: true } },
         },
         orderBy: { createdAt: "desc" }
-      }),
-    ]);
+      }).finally(() => {
+      rowsDuration = performance.now() - rowsStartedAt;
+    });
+    const [total, plans] = await Promise.all([totalPromise, plansPromise]);
+    const dbDuration = performance.now() - dbStartedAt;
 
-    return response.success(plans, undefined, getPaginationMeta(pagination, total));
+    return withServerTiming(
+      response.success(plans, undefined, getPaginationMeta(pagination, total)),
+      [
+        { name: "count", durationMs: countDuration, description: "Prisma count query" },
+        { name: "rows", durationMs: rowsDuration, description: "Prisma rows query" },
+        { name: "db", durationMs: dbDuration, description: "Prisma list queries" },
+        { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+      ]
+    );
   } catch (error) {
     console.error("[GET /api/audit-plans] Error:", error);
     return response.error("Internal server error", 500);

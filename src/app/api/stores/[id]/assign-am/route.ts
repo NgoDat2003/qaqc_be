@@ -50,7 +50,11 @@ export async function PATCH(
     const updated = await prisma.store.update({
       where: { id },
       data: { amId },
-      include: {
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        amId: true,
         am: { select: { id: true, fullName: true, email: true } }
       }
     });

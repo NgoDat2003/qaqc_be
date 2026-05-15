@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
+import { attachRoleAssignmentStores } from "@/lib/user-role-assignment-store";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 
@@ -89,12 +90,23 @@ export async function PATCH(
       return await tx.user.update({
         where: { id },
         data: updateData,
-        include: { roleAssignments: true }
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          phone: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          roleAssignments: {
+            select: { id: true, roleKey: true, storeId: true },
+          },
+        }
       });
     });
 
-    const { password: _, ...safeUser } = updated;
-    return response.success(safeUser, "User updated successfully");
+    const [user] = await attachRoleAssignmentStores(prisma, [updated]);
+    return response.success(user, "User updated successfully");
   } catch (error) {
     console.error("[PATCH /api/users/[id]] Error:", error);
     return response.error("Internal server error", 500);

@@ -3,8 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
 import { getPaginationMeta, getPaginationParams } from "@/lib/pagination";
+import { withServerTiming } from "@/lib/server-timing";
+import { attachRoleAssignmentStores } from "@/lib/user-role-assignment-store";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+
+export const dynamic = "force-dynamic";
 
 const VALID_ROLES = ["company_admin", "qa_manager", "qc_auditor", "am", "store_manager", "executive_viewer"];
 
@@ -27,6 +31,8 @@ const createUserSchema = z.object({
  * Accessible by: company_admin, qa_manager
  */
 export async function GET(request: NextRequest) {
+  const startedAt = performance.now();
+
   try {
     const forbidden = requireRole(request, ["company_admin", "qa_manager"]);
     if (forbidden) return forbidden;
@@ -34,9 +40,16 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const pagination = getPaginationParams(searchParams);
 
-    const [total, users] = await prisma.$transaction([
-      prisma.user.count(),
-      prisma.user.findMany({
+    let countDuration = 0;
+    let rowsDuration = 0;
+    let relationsDuration = 0;
+    const dbStartedAt = performance.now();
+    const countStartedAt = performance.now();
+    const totalPromise = prisma.user.count().finally(() => {
+      countDuration = performance.now() - countStartedAt;
+    });
+    const rowsStartedAt = performance.now();
+    const usersPromise = prisma.user.findMany({
         skip: pagination.skip,
         take: pagination.take,
         select: {
@@ -52,10 +65,25 @@ export async function GET(request: NextRequest) {
           },
         },
         orderBy: { createdAt: "desc" },
-      }),
-    ]);
+      }).finally(() => {
+      rowsDuration = performance.now() - rowsStartedAt;
+    });
+    const [total, rawUsers] = await Promise.all([totalPromise, usersPromise]);
+    const relationsStartedAt = performance.now();
+    const users = await attachRoleAssignmentStores(prisma, rawUsers);
+    relationsDuration = performance.now() - relationsStartedAt;
+    const dbDuration = performance.now() - dbStartedAt;
     
-    return response.success(users, undefined, getPaginationMeta(pagination, total));
+    return withServerTiming(
+      response.success(users, undefined, getPaginationMeta(pagination, total)),
+      [
+        { name: "count", durationMs: countDuration, description: "Prisma count query" },
+        { name: "rows", durationMs: rowsDuration, description: "Prisma rows query" },
+        { name: "relations", durationMs: relationsDuration, description: "Role store lookup" },
+        { name: "db", durationMs: dbDuration, description: "Prisma list queries" },
+        { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+      ]
+    );
   } catch (error) {
     console.error("[GET /api/users] Error:", error);
     return response.error("Internal server error", 500);
@@ -89,7 +117,7 @@ export async function POST(request: NextRequest) {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // 3. Create user and assignments in a transaction
-    const user = await prisma.user.create({
+    const rawUser = await prisma.user.create({
       data: {
         email,
         fullName,
@@ -99,13 +127,21 @@ export async function POST(request: NextRequest) {
           create: roleAssignments
         }
       },
-      include: {
-        roleAssignments: true
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        phone: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        roleAssignments: {
+          select: { id: true, roleKey: true, storeId: true },
+        },
       }
     });
-
-    const { password: _, ...safeUser } = user;
-    return response.created(safeUser, "User created successfully");
+    const [user] = await attachRoleAssignmentStores(prisma, [rawUser]);
+    return response.created(user, "User created successfully");
   } catch (error) {
     console.error("[POST /api/users] Error:", error);
     return response.error("Internal server error", 500);

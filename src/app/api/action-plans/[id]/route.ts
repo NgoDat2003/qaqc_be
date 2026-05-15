@@ -8,6 +8,7 @@ import {
   getAssignedStoreIds,
   getRequestUser,
 } from "@/lib/scope";
+import { withServerTiming } from "@/lib/server-timing";
 import { z } from "zod";
 
 const updateActionPlanSchema = z.object({
@@ -16,12 +17,15 @@ const updateActionPlanSchema = z.object({
 });
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+  const startedAt = performance.now();
+
   try {
     const user = getRequestUser(request);
     if (!user) return response.unauthorized();
 
     const { id } = params;
 
+    const lookupStartedAt = performance.now();
     const actionPlan = await prisma.actionPlan.findUnique({
       where: { id },
       select: {
@@ -63,15 +67,22 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         },
       },
     });
+    const lookupDuration = performance.now() - lookupStartedAt;
 
     if (!actionPlan) return response.error("Action Plan not found", 404);
 
+    const scopeStartedAt = performance.now();
     const hasAccess = await canAccessActionPlanRecord(prisma, user.userId, user.roles, actionPlan);
+    const scopeDuration = performance.now() - scopeStartedAt;
     if (!hasAccess) {
       return response.error("Unauthorized access to this action plan", 403);
     }
 
-    return response.success(actionPlan);
+    return withServerTiming(response.success(actionPlan), [
+      { name: "lookup", durationMs: lookupDuration, description: "Action plan detail query" },
+      { name: "scope", durationMs: scopeDuration, description: "Scope check" },
+      { name: "total", durationMs: performance.now() - startedAt, description: "Route handler" },
+    ]);
   } catch (error) {
     console.error("GET Action Plan Detail Error:", error);
     return response.error("Internal server error", 500);
