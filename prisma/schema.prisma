@@ -115,8 +115,9 @@ model CriteriaGroup {
   code  String @unique  // "A", "B", "C", "D"
   name  String
   // 0.0–1.0 | all groups sum = 1.0 (validated at service layer)
-  weight Float
-  color String?
+  weight   Float
+  color    String?
+  isActive Boolean @default(true)
 
   criteria ChecklistSection[]
   items    Criteria[]
@@ -182,6 +183,7 @@ model ChecklistSection {
   group   CriteriaGroup @relation(fields: [groupId], references: [id])
   name    String
   order   Int           @default(0)
+  weight  Float         @default(0)
 
   items ChecklistSectionItem[]
 

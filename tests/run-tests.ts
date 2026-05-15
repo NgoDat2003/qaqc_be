@@ -608,6 +608,282 @@ const tests: TestCase[] = [
       assert.equal(body.error.message, "Account is disabled");
     },
   },
+  {
+    name: "route criteria-groups list khong expose weight cua group",
+    run: async () => {
+      setPrismaModel("criteriaGroup", {
+        findMany: async () => [
+          {
+            id: "group-c",
+            code: "C",
+            name: "Cleanliness",
+            color: "#22c55e",
+            isActive: true,
+            createdAt: new Date("2026-05-01"),
+            updatedAt: new Date("2026-05-02"),
+          },
+        ],
+      });
+
+      const route = await import("../src/app/api/criteria-groups/route");
+      const result = await route.GET(fakeRouteRequest({ roles: ["qa_manager"] }));
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data[0].code, "C");
+      assert.equal("weight" in body.data[0], false);
+    },
+  },
+  {
+    name: "route criteria create bat buoc group active",
+    run: async () => {
+      setPrismaModel("criteria", {
+        findUnique: async () => null,
+      });
+      setPrismaModel("criteriaGroup", {
+        findFirst: async () => null,
+      });
+
+      const route = await import("../src/app/api/criteria/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            code: "c-001",
+            content: "San nha khong sach",
+            groupId: "missing-group",
+            deductionPerError: 1,
+            maxDeduction: 3,
+            flag: "none",
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Criteria group not found or inactive");
+    },
+  },
+  {
+    name: "route checklist publish chan tong section weight khac 100",
+    run: async () => {
+      setPrismaModel("checklistForm", {
+        findUnique: async () => ({
+          id: "form-1",
+          name: "Checklist Cua Hang",
+          version: "v1",
+          status: "draft",
+          publishedAt: null,
+          createdAt: new Date("2026-05-01"),
+          updatedAt: new Date("2026-05-02"),
+          sections: [
+            {
+              id: "section-1",
+              name: "C",
+              order: 1,
+              groupId: "group-c",
+              weight: 70,
+              createdAt: new Date("2026-05-01"),
+              group: { id: "group-c", code: "C", name: "Cleanliness" },
+              items: [
+                {
+                  id: "item-1",
+                  order: 1,
+                  criteriaId: "criteria-1",
+                  criteria: {
+                    id: "criteria-1",
+                    code: "C-001",
+                    content: "San sach",
+                    groupId: "group-c",
+                    deductionPerError: 1,
+                    maxDeduction: 3,
+                    flag: "none",
+                    isActive: true,
+                    createdAt: new Date("2026-05-01"),
+                    updatedAt: new Date("2026-05-02"),
+                    group: { id: "group-c", code: "C", name: "Cleanliness" },
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      const route = await import("../src/app/api/checklists/[id]/publish/route");
+      const result = await route.POST(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        { params: { id: "form-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Checklist section weights must total 100");
+    },
+  },
+  {
+    name: "route audit-plan create khong nhan contract cu stores + auditorId",
+    run: async () => {
+      const route = await import("../src/app/api/audit-plans/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            name: "Plan Sai Contract",
+            formId: "form-1",
+            stores: ["store-1", "store-2"],
+            auditorId: "qc-1",
+          },
+        })
+      );
+
+      assert.equal(result.status, 400);
+    },
+  },
+  {
+    name: "route audit-plan create tao assignment theo tung store va QC",
+    run: async () => {
+      let createdAssignments: any[] = [];
+      setPrismaModel("checklistForm", {
+        findUnique: async () => ({ id: "form-1", status: "published" }),
+      });
+      setPrismaModel("store", {
+        findMany: async () => [{ id: "store-1" }, { id: "store-2" }],
+      });
+      setPrismaModel("user", {
+        findMany: async () => [{ id: "qc-1" }, { id: "qc-2" }],
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          auditPlan: {
+            create: async (args: any) => {
+              createdAssignments = args.data.assignments.create;
+              return { id: "plan-1" };
+            },
+            findUniqueOrThrow: async () => ({
+              id: "plan-1",
+              name: "Plan Dung Contract",
+              type: "adhoc",
+              scope: "company",
+              status: "open",
+              formId: "form-1",
+              createdAt: new Date("2026-05-01"),
+              updatedAt: new Date("2026-05-02"),
+              form: {
+                id: "form-1",
+                name: "Checklist",
+                version: "v1",
+                status: "published",
+              },
+              assignments: [
+                {
+                  id: "assignment-1",
+                  status: "pending",
+                  scheduledDate: new Date("2026-05-20"),
+                  auditId: null,
+                  storeId: "store-1",
+                  auditorId: "qc-1",
+                  store: { id: "store-1", code: "MC-001", name: "Store 1" },
+                  auditor: { id: "qc-1", fullName: "QC One", email: "qc1@example.com" },
+                },
+                {
+                  id: "assignment-2",
+                  status: "pending",
+                  scheduledDate: new Date("2026-05-21"),
+                  auditId: null,
+                  storeId: "store-2",
+                  auditorId: "qc-2",
+                  store: { id: "store-2", code: "MC-002", name: "Store 2" },
+                  auditor: { id: "qc-2", fullName: "QC Two", email: "qc2@example.com" },
+                },
+              ],
+            }),
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audit-plans/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            name: "Plan Dung Contract",
+            formId: "form-1",
+            assignments: [
+              {
+                storeId: "store-1",
+                auditorId: "qc-1",
+                scheduledDate: "2026-05-20",
+              },
+              {
+                storeId: "store-2",
+                auditorId: "qc-2",
+                scheduledDate: "2026-05-21",
+              },
+            ],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 201);
+      assert.deepEqual(
+        createdAssignments.map((assignment) => ({
+          storeId: assignment.storeId,
+          auditorId: assignment.auditorId,
+        })),
+        [
+          { storeId: "store-1", auditorId: "qc-1" },
+          { storeId: "store-2", auditorId: "qc-2" },
+        ]
+      );
+      assert.equal(body.data.progress.total, 2);
+      assert.equal(body.data.assignments[1].auditor.fullName, "QC Two");
+    },
+  },
+  {
+    name: "route my-assignments chi lay assignment cua QC hien tai",
+    run: async () => {
+      let scopedAuditorId = "";
+      setPrismaModel("auditAssignment", {
+        findMany: async (args: any) => {
+          scopedAuditorId = args.where.auditorId;
+          return [
+            {
+              id: "assignment-1",
+              status: "pending",
+              scheduledDate: new Date("2026-05-20"),
+              auditId: null,
+              store: { id: "store-1", code: "MC-001", name: "Store 1" },
+              plan: {
+                id: "plan-1",
+                name: "Plan 1",
+                status: "open",
+                form: { id: "form-1", name: "Checklist", version: "v1" },
+              },
+            },
+          ];
+        },
+      });
+
+      const route = await import("../src/app/api/audit-plans/my-assignments/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(scopedAuditorId, "qc-1");
+      assert.deepEqual(body.data[0].checklist, {
+        id: "form-1",
+        name: "Checklist",
+        version: "v1",
+      });
+    },
+  },
 ];
 
 async function main() {
