@@ -1,6 +1,7 @@
 import assert from "assert/strict";
 import path from "path";
 import Module from "module";
+import { unlink } from "fs/promises";
 import { prisma } from "../src/lib/prisma";
 import { response } from "../src/lib/api-response";
 import { getRoles, hasRole } from "../src/lib/rbac";
@@ -9,6 +10,7 @@ import {
   invalidateAdminCache,
   readAdminCache,
 } from "../src/lib/admin-cache";
+import { calculateAuditScore } from "../src/lib/scoring";
 
 const originalResolveFilename = (Module as any)._resolveFilename;
 (Module as any)._resolveFilename = function resolveAlias(
@@ -1422,6 +1424,618 @@ const tests: TestCase[] = [
       assert.equal(deletedItemId, "item-1");
       assert.equal(body.data.id, "form-1");
       assert.deepEqual(body.data.sections, []);
+    },
+  },
+  {
+    name: "scoring tinh diem thuong, critical va risk dung rule",
+    run: () => {
+      const normal = calculateAuditScore({
+        groups: [
+          { id: "group-c", code: "C", weight: 50 },
+          { id: "group-h", code: "H", weight: 50 },
+        ],
+        criteria: [
+          {
+            id: "criteria-c",
+            groupId: "group-c",
+            groupCode: "C",
+            deductionPerError: 2,
+            maxDeduction: 10,
+            flag: "none",
+          },
+          {
+            id: "criteria-h",
+            groupId: "group-h",
+            groupCode: "H",
+            deductionPerError: 1,
+            maxDeduction: 5,
+            flag: "critical",
+          },
+        ],
+        violations: [
+          {
+            criteriaId: "criteria-c",
+            numErrors: 2,
+            repeatCount: 2,
+            repeatLabel: "second",
+            isCriticalTriggered: false,
+          },
+          {
+            criteriaId: "criteria-h",
+            numErrors: 1,
+            repeatCount: 1,
+            repeatLabel: "first",
+            isCriticalTriggered: false,
+          },
+        ],
+      });
+
+      assert.equal(normal.finalScore, 46);
+      assert.equal(normal.groupScores[1].triggeredCritical, true);
+
+      const risk = calculateAuditScore({
+        groups: [{ id: "group-c", code: "C", weight: 100 }],
+        criteria: [
+          {
+            id: "criteria-risk",
+            groupId: "group-c",
+            groupCode: "C",
+            deductionPerError: 1,
+            maxDeduction: 5,
+            flag: "risk",
+          },
+        ],
+        violations: [
+          {
+            criteriaId: "criteria-risk",
+            numErrors: 1,
+            repeatCount: 1,
+            repeatLabel: "first",
+            isCriticalTriggered: false,
+          },
+        ],
+      });
+
+      assert.equal(risk.finalScore, 0);
+      assert.equal(risk.grade, "alarm");
+    },
+  },
+  {
+    name: "route audit session tra du lieu co ban va khong kem history bundle",
+    run: async () => {
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          status: "pending",
+          auditId: null,
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [],
+            },
+          },
+          audit: null,
+        }),
+      });
+
+      const route = await import("../src/app/api/audits/assignments/[assignmentId]/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+        }),
+        { params: { assignmentId: "assignment-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.assignment.store.name, "Store 1");
+      assert.equal("historiesByCriteriaId" in body.data, false);
+    },
+  },
+  {
+    name: "route audit history bundle gom lich su theo criteria trong mot lan",
+    run: async () => {
+      let violationCalls = 0;
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          status: "pending",
+          auditId: null,
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [
+                {
+                  group: { id: "group-c", code: "C" },
+                  weight: 100,
+                  items: [
+                    { criteria: { id: "criteria-1" } },
+                    { criteria: { id: "criteria-2" } },
+                  ],
+                },
+              ],
+            },
+          },
+          audit: null,
+        }),
+      });
+      setPrismaModel("violation", {
+        findMany: async () => {
+          violationCalls += 1;
+          return [
+            {
+              criteriaId: "criteria-1",
+              numErrors: 1,
+              repeatCount: 1,
+              note: "old issue",
+              audit: {
+                id: "audit-old",
+                submittedAt: new Date("2026-05-10"),
+              },
+              evidences: [{ id: "img-1", url: "/img-1.jpg" }],
+            },
+          ];
+        },
+      });
+
+      const route = await import(
+        "../src/app/api/audits/assignments/[assignmentId]/history/route"
+      );
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+        }),
+        { params: { assignmentId: "assignment-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(violationCalls, 1);
+      assert.equal(body.data.historiesByCriteriaId["criteria-1"].repeatCount, 2);
+      assert.equal(body.data.historiesByCriteriaId["criteria-2"].repeatCount, 1);
+      assert.equal(
+        body.data.historiesByCriteriaId["criteria-1"].history[0].images[0].id,
+        "img-1"
+      );
+    },
+  },
+  {
+    name: "route audit draft dau tien tao audit va chuyen assignment in_progress",
+    run: async () => {
+      let updatedStatus = "";
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          status: "pending",
+          auditId: null,
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [
+                {
+                  group: { id: "group-c", code: "C" },
+                  weight: 100,
+                  items: [{ criteria: { id: "criteria-1" } }],
+                },
+              ],
+            },
+          },
+          audit: null,
+        }),
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          audit: {
+            create: async () => ({ id: "audit-1" }),
+          },
+          auditAssignment: {
+            updateMany: async (args: any) => {
+              updatedStatus = args.data.status;
+              return { count: 1 };
+            },
+            findUniqueOrThrow: async () => ({
+              id: "assignment-1",
+              status: "in_progress",
+              auditId: "audit-1",
+              auditorId: "qc-1",
+              storeId: "store-1",
+              store: { id: "store-1", code: "MC-001", name: "Store 1" },
+              plan: {
+                id: "plan-1",
+                name: "Plan 1",
+                status: "open",
+                startDate: new Date("2026-05-01"),
+                endDate: new Date("2026-05-30"),
+                formId: "form-1",
+                form: {
+                  id: "form-1",
+                  name: "Checklist",
+                  version: "v1",
+                  status: "published",
+                  sections: [],
+                },
+              },
+              audit: {
+                id: "audit-1",
+                submittedAt: null,
+                violations: [],
+              },
+            }),
+          },
+          violation: {
+            findMany: async () => [],
+            deleteMany: async () => ({ count: 0 }),
+            create: async () => ({ id: "violation-1" }),
+          },
+          evidence: {
+            updateMany: async () => ({ count: 0 }),
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audits/draft/route");
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+          body: {
+            assignmentId: "assignment-1",
+            violations: [
+              {
+                criteriaId: "criteria-1",
+                numErrors: 1,
+              },
+            ],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(updatedStatus, "in_progress");
+      assert.equal(body.data.audit.id, "audit-1");
+    },
+  },
+  {
+    name: "route audit draft tra 409 neu assignment bi doi trang thai giua luc xu ly",
+    run: async () => {
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          status: "pending",
+          auditId: null,
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [
+                {
+                  group: { id: "group-c", code: "C" },
+                  weight: 100,
+                  items: [{ criteria: { id: "criteria-1" } }],
+                },
+              ],
+            },
+          },
+          audit: null,
+        }),
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          audit: {
+            create: async () => ({ id: "audit-race" }),
+          },
+          auditAssignment: {
+            updateMany: async () => ({ count: 0 }),
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audits/draft/route");
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+          body: {
+            assignmentId: "assignment-1",
+            violations: [],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 409);
+      assert.equal(
+        body.error.message,
+        "Audit assignment changed while the request was in progress"
+      );
+    },
+  },
+  {
+    name: "route audit submit tinh repeat va tao action plan draft",
+    run: async () => {
+      let actionPlanCreated = false;
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          status: "in_progress",
+          auditId: "audit-1",
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [
+                {
+                  group: { id: "group-c", code: "C" },
+                  weight: 100,
+                  items: [
+                    {
+                      criteria: {
+                        id: "criteria-1",
+                        deductionPerError: 2,
+                        maxDeduction: 10,
+                        flag: "none",
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          audit: {
+            id: "audit-1",
+            submittedAt: null,
+            violations: [],
+          },
+        }),
+      });
+      setPrismaModel("violation", {
+        findMany: async (args?: any) => {
+          if (args?.where?.auditId) return [];
+          return [
+            { criteriaId: "criteria-1" },
+            { criteriaId: "criteria-1" },
+            { criteriaId: "criteria-1" },
+          ];
+        },
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          violation: {
+            findMany: async () => [],
+            deleteMany: async () => ({ count: 0 }),
+            create: async () => ({ id: "violation-1" }),
+          },
+          evidence: {
+            updateMany: async () => ({ count: 0 }),
+          },
+          groupScore: {
+            deleteMany: async () => ({ count: 0 }),
+            createMany: async () => ({ count: 1 }),
+          },
+          audit: {
+            update: async () => ({
+              id: "audit-1",
+              finalScore: 0,
+              grade: "fail",
+              isRiskTriggered: false,
+            }),
+          },
+          auditAssignment: {
+            updateMany: async () => ({ count: 1 }),
+            update: async () => ({ id: "assignment-1" }),
+          },
+          actionPlan: {
+            upsert: async () => {
+              actionPlanCreated = true;
+              return { id: "ap-1" };
+            },
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audits/submit/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+          body: {
+            assignmentId: "assignment-1",
+            violations: [
+              {
+                criteriaId: "criteria-1",
+                numErrors: 1,
+              },
+            ],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.repeatInfo[0].repeatLabel, "auto_ccp");
+      assert.equal(actionPlanCreated, true);
+    },
+  },
+  {
+    name: "route audit submit tra 409 neu assignment bi submit dong thoi",
+    run: async () => {
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          status: "in_progress",
+          auditId: "audit-1",
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [
+                {
+                  group: { id: "group-c", code: "C" },
+                  weight: 100,
+                  items: [
+                    {
+                      criteria: {
+                        id: "criteria-1",
+                        deductionPerError: 2,
+                        maxDeduction: 10,
+                        flag: "none",
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          audit: {
+            id: "audit-1",
+            submittedAt: null,
+            violations: [],
+          },
+        }),
+      });
+      setPrismaModel("violation", {
+        findMany: async () => [],
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          auditAssignment: {
+            updateMany: async () => ({ count: 0 }),
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audits/submit/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+          body: {
+            assignmentId: "assignment-1",
+            violations: [
+              {
+                criteriaId: "criteria-1",
+                numErrors: 1,
+              },
+            ],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 409);
+      assert.equal(
+        body.error.message,
+        "Audit assignment changed while the request was in progress"
+      );
+    },
+  },
+  {
+    name: "route upload images luu extension theo mime type hop le thay vi ten file goc",
+    run: async () => {
+      setPrismaModel("evidence", {
+        create: async (args: any) => ({
+          id: "img-1",
+          ...args.data,
+        }),
+      });
+      const route = await import("../src/app/api/upload/images/route");
+      const pngSignature = Uint8Array.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      ]);
+      const file = new File([pngSignature], "payload.html", { type: "image/png" });
+      const result = await route.POST({
+        headers: {
+          get: (name: string) => {
+            if (name === "x-user-id") return "qc-1";
+            if (name === "x-user-roles") return JSON.stringify(["qc_auditor"]);
+            return undefined;
+          },
+        },
+        formData: async () => ({
+          get: (name: string) => (name === "file" ? file : null),
+        }),
+      } as any);
+      const body = await responseJson(result);
+
+      try {
+        assert.equal(result.status, 201);
+        assert.equal(body.data.url.endsWith(".png"), true);
+        assert.equal(body.data.url.endsWith(".html"), false);
+      } finally {
+        await unlink(path.join(process.cwd(), "public", body.data.url.replace(/^\//, "")));
+      }
     },
   },
 ];

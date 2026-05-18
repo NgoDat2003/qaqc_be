@@ -5,15 +5,15 @@
 - Nhanh hien tai: `dev`
 - Baseline: `main`
 - Huong moi: lam lai theo role-first
-- Role dang chuan bi: `qa_manager`
+- Role dang chuan bi: `store_manager`
 - Database: giu nguyen, khong reset / truncate / reseed
 - Source tren `dev`: don ve skeleton toi thieu, chi giu ha tang nen va auth
 
 ## Dieu Dang Cho
 
-Admin core da hoan thanh tren nhanh `dev`.
+Admin core va QAM foundation da hoan thanh tren nhanh `dev`.
 
-BE dang mo tiep QAM Foundation: criteria group, criteria, checklist builder, audit plan va QC my assignments.
+QC Audit Execution Core da hoan thanh: mo bai audit, luu draft, history bundle, anh bang chung, scoring va submit.
 
 Tai lieu dau vao can dung mau:
 
@@ -42,5 +42,6 @@ Nhung module khac se duoc dua lai vao source khi co tai lieu FE va role tuong un
 ## Thu Tu Sau Khi Co Tai Lieu FE
 
 1. Admin core: done.
-2. QAM Foundation: dang implement.
-3. Sau QAM Foundation moi mo QC audit execution + scoring.
+2. QAM Foundation: done.
+3. QC audit execution + scoring: done.
+4. Tiep theo: store manager + luong yeu cau xem lai bai / action plan.
