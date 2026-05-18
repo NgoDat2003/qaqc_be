@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
-import { myAssignmentSelect } from "@/lib/qam";
+import { isAuditWindowOpen, myAssignmentSelect } from "@/lib/qam";
 
 export async function GET(request: NextRequest) {
   const forbidden = requireRole(request, ["qc_auditor"]);
@@ -17,21 +17,26 @@ export async function GET(request: NextRequest) {
     const assignments = await prisma.auditAssignment.findMany({
       where: {
         auditorId: userId,
+        plan: {
+          status: "open",
+        },
       },
       select: myAssignmentSelect,
-      orderBy: { scheduledDate: "asc" },
+      orderBy: { createdAt: "asc" },
     });
 
     return response.success(
       assignments.map((assignment) => ({
         id: assignment.id,
         status: assignment.status,
-        scheduledDate: assignment.scheduledDate,
         store: assignment.store,
         plan: {
           id: assignment.plan.id,
           name: assignment.plan.name,
           status: assignment.plan.status,
+          startDate: assignment.plan.startDate,
+          endDate: assignment.plan.endDate,
+          isAuditWindowOpen: isAuditWindowOpen(assignment.plan),
         },
         checklist: assignment.plan.form,
         auditId: assignment.auditId,

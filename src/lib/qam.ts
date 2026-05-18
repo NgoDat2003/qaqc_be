@@ -97,6 +97,8 @@ export const auditPlanDetailSelect = {
   type: true,
   scope: true,
   status: true,
+  startDate: true,
+  endDate: true,
   createdAt: true,
   updatedAt: true,
   formId: true,
@@ -112,7 +114,6 @@ export const auditPlanDetailSelect = {
     select: {
       id: true,
       status: true,
-      scheduledDate: true,
       auditId: true,
       storeId: true,
       auditorId: true,
@@ -132,7 +133,7 @@ export const auditPlanDetailSelect = {
       },
     },
     orderBy: {
-      scheduledDate: "asc",
+      createdAt: "asc",
     },
   },
 } as const;
@@ -140,7 +141,6 @@ export const auditPlanDetailSelect = {
 export const myAssignmentSelect = {
   id: true,
   status: true,
-  scheduledDate: true,
   auditId: true,
   store: {
     select: {
@@ -154,6 +154,8 @@ export const myAssignmentSelect = {
       id: true,
       name: true,
       status: true,
+      startDate: true,
+      endDate: true,
       form: {
         select: {
           id: true,
@@ -246,11 +248,29 @@ export const sectionItemCreateSchema = z.object({
 export const auditPlanCreateSchema = z.object({
   name: z.string().trim().min(2).max(150),
   formId: z.string().trim().min(1),
+  startDate: z.string().trim().min(1),
+  endDate: z.string().trim().min(1),
   assignments: z.array(z.object({
     storeId: z.string().trim().min(1),
     auditorId: z.string().trim().min(1),
-    scheduledDate: z.string().trim().min(1),
   })).min(1),
+});
+
+export const auditPlanUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(150).optional(),
+  formId: z.string().trim().min(1).optional(),
+  startDate: z.string().trim().min(1).optional(),
+  endDate: z.string().trim().min(1).optional(),
+  assignments: z.array(z.object({
+    storeId: z.string().trim().min(1),
+    auditorId: z.string().trim().min(1),
+  })).optional(),
+}).refine((data) => Object.keys(data).length > 0, {
+  message: "At least one field is required",
+});
+
+export const auditAssignmentUpdateSchema = z.object({
+  auditorId: z.string().trim().min(1),
 });
 
 export function getValidationMessage(error: z.ZodError) {
@@ -264,6 +284,35 @@ export function assertUniqueValues(values: string[]) {
 export function parseDate(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function isValidAuditWindow(startDate: Date, endDate: Date) {
+  return startDate.getTime() <= endDate.getTime();
+}
+
+export function isAuditWindowOpen(
+  plan: { status: string; startDate: Date; endDate: Date },
+  now = new Date()
+) {
+  return (
+    plan.status === "open" &&
+    plan.startDate.getTime() <= now.getTime() &&
+    now.getTime() <= plan.endDate.getTime()
+  );
+}
+
+export function assertPendingAssignmentMutable(
+  assignment: { status: string; auditId: string | null }
+) {
+  if (assignment.status !== "pending") {
+    return "Only pending assignment can be changed";
+  }
+
+  if (assignment.auditId) {
+    return "Assignment already has audit data";
+  }
+
+  return null;
 }
 
 export function isWeightTotalValid(weights: number[]) {

@@ -6,7 +6,7 @@ Ngay test: 2026-05-15
 
 | Hang muc | Ket qua | Ghi chu |
 |---|---:|---|
-| Unit/route tests | Pass | `25/25 tests passed` |
+| Unit/route tests | Pass | 37/37; da mo rong them test QAM/Audit Window/Delete endpoints va Audit Plan Draft Workflow |
 | Build/typecheck | Pass | `npm.cmd run build` thanh cong |
 | Prisma schema validate | Pass | `prisma/schema.prisma` hop le |
 | ESLint script | Chua ket luan | `npm run lint` hien prompt cau hinh ESLint vi repo chua co config rieng |
@@ -18,8 +18,11 @@ Ngay test: 2026-05-15
 | Criteria Group | List group khong expose `weight` |
 | Criteria | Tao criteria bi chan neu `groupId` khong ton tai hoac inactive |
 | Checklist Publish | Chan publish khi tong `section.weight` khac `100` |
+| Checklist Builder Delete | Chan xoa section khi checklist khong phai `draft`; xoa item dung path va tra checklist detail |
+| Audit Window | Chan window sai thu tu ngay, tao plan bang `startDate/endDate`, my assignments co `isAuditWindowOpen` |
 | Audit Plan Contract | Chan request cu `stores[] + auditorId` |
 | Audit Plan Assignment | Tao dung tung cap `storeId + auditorId` trong `assignments[]` |
+| Audit Plan Draft Workflow | Create tra `draft`, publish sang `open`, PATCH theo status, doi/xoa assignment pending |
 | QC Scope | `/api/audit-plans/my-assignments` chi query assignment cua QC hien tai |
 
 ## Cac Case Admin Regression Van Pass
@@ -37,7 +40,7 @@ Ngay test: 2026-05-15
 | Uu tien | Khoang trong | Ly do |
 |---|---|---|
 | Cao | Checklist publish success path | Hien da test fail path weight, chua test duong publish hop le cap nhat `publishedAt`. |
-| Cao | Section/item mutation | Can test chi draft moi sua duoc, criteria phai cung group voi section. |
+| Cao | Section/item mutation | Da co test delete co ban; nen bo sung them test PATCH section doi group va POST item khac group. |
 | Cao | Audit plan invalid store/auditor | Can test store inactive/missing va auditor khong phai `qc_auditor`. |
 | Trung binh | Checklist archive | Can test chi `published` moi archive duoc. |
 | Trung binh | Criteria update partial max/deduction | Can test cap nhat 1 field khong lam sai rule `maxDeduction >= deductionPerError`. |

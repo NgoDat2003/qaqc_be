@@ -78,6 +78,39 @@ function setPrismaModel(model: string, implementation: unknown) {
   });
 }
 
+function auditPlanFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "plan-1",
+    name: "Plan",
+    type: "adhoc",
+    scope: "company",
+    status: "draft",
+    formId: "form-1",
+    startDate: new Date("2026-05-20"),
+    endDate: new Date("2026-05-30"),
+    createdAt: new Date("2026-05-01"),
+    updatedAt: new Date("2026-05-02"),
+    form: {
+      id: "form-1",
+      name: "Checklist",
+      version: "v1",
+      status: "published",
+    },
+    assignments: [
+      {
+        id: "assignment-1",
+        status: "pending",
+        auditId: null,
+        storeId: "store-1",
+        auditorId: "qc-1",
+        store: { id: "store-1", code: "MC-001", name: "Store 1" },
+        auditor: { id: "qc-1", fullName: "QC One", email: "qc1@example.com" },
+      },
+    ],
+    ...overrides,
+  };
+}
+
 const tests: TestCase[] = [
   {
     name: "response.success tra envelope thanh cong",
@@ -741,9 +774,38 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "route audit-plan create tao assignment theo tung store va QC",
+    name: "route audit-plan create chan audit window sai thu tu ngay",
+    run: async () => {
+      const route = await import("../src/app/api/audit-plans/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            name: "Plan Sai Window",
+            formId: "form-1",
+            startDate: "2026-05-30",
+            endDate: "2026-05-01",
+            assignments: [
+              {
+                storeId: "store-1",
+                auditorId: "qc-1",
+              },
+            ],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "startDate must be before or equal to endDate");
+    },
+  },
+  {
+    name: "route audit-plan create tao window va assignment theo tung store QC",
     run: async () => {
       let createdAssignments: any[] = [];
+      let createdPlanWindow: any = {};
+      let createdPlanStatus = "";
       setPrismaModel("checklistForm", {
         findUnique: async () => ({ id: "form-1", status: "published" }),
       });
@@ -758,6 +820,11 @@ const tests: TestCase[] = [
           auditPlan: {
             create: async (args: any) => {
               createdAssignments = args.data.assignments.create;
+              createdPlanWindow = {
+                startDate: args.data.startDate,
+                endDate: args.data.endDate,
+              };
+              createdPlanStatus = args.data.status;
               return { id: "plan-1" };
             },
             findUniqueOrThrow: async () => ({
@@ -765,8 +832,10 @@ const tests: TestCase[] = [
               name: "Plan Dung Contract",
               type: "adhoc",
               scope: "company",
-              status: "open",
+              status: "draft",
               formId: "form-1",
+              startDate: new Date("2026-05-20"),
+              endDate: new Date("2026-05-30"),
               createdAt: new Date("2026-05-01"),
               updatedAt: new Date("2026-05-02"),
               form: {
@@ -779,7 +848,6 @@ const tests: TestCase[] = [
                 {
                   id: "assignment-1",
                   status: "pending",
-                  scheduledDate: new Date("2026-05-20"),
                   auditId: null,
                   storeId: "store-1",
                   auditorId: "qc-1",
@@ -789,7 +857,6 @@ const tests: TestCase[] = [
                 {
                   id: "assignment-2",
                   status: "pending",
-                  scheduledDate: new Date("2026-05-21"),
                   auditId: null,
                   storeId: "store-2",
                   auditorId: "qc-2",
@@ -809,16 +876,16 @@ const tests: TestCase[] = [
           body: {
             name: "Plan Dung Contract",
             formId: "form-1",
+            startDate: "2026-05-20",
+            endDate: "2026-05-30",
             assignments: [
               {
                 storeId: "store-1",
                 auditorId: "qc-1",
-                scheduledDate: "2026-05-20",
               },
               {
                 storeId: "store-2",
                 auditorId: "qc-2",
-                scheduledDate: "2026-05-21",
               },
             ],
           },
@@ -831,34 +898,429 @@ const tests: TestCase[] = [
         createdAssignments.map((assignment) => ({
           storeId: assignment.storeId,
           auditorId: assignment.auditorId,
+          hasScheduledDate: "scheduledDate" in assignment,
         })),
         [
-          { storeId: "store-1", auditorId: "qc-1" },
-          { storeId: "store-2", auditorId: "qc-2" },
+          { storeId: "store-1", auditorId: "qc-1", hasScheduledDate: false },
+          { storeId: "store-2", auditorId: "qc-2", hasScheduledDate: false },
         ]
       );
+      assert.equal(createdPlanWindow.startDate.toISOString(), "2026-05-20T00:00:00.000Z");
+      assert.equal(createdPlanWindow.endDate.toISOString(), "2026-05-30T00:00:00.000Z");
+      assert.equal(createdPlanStatus, "draft");
+      assert.equal(body.data.status, "draft");
+      assert.equal(body.data.startDate, new Date("2026-05-20").toISOString());
+      assert.equal(body.data.endDate, new Date("2026-05-30").toISOString());
       assert.equal(body.data.progress.total, 2);
       assert.equal(body.data.assignments[1].auditor.fullName, "QC Two");
+    },
+  },
+  {
+    name: "route audit-plan publish chuyen draft thanh open",
+    run: async () => {
+      let updatedStatus = "";
+      setPrismaModel("auditPlan", {
+        findUnique: async () => ({
+          id: "plan-1",
+          status: "draft",
+          startDate: new Date("2026-05-20"),
+          endDate: new Date("2026-05-30"),
+          form: { status: "published" },
+          assignments: [
+            {
+              id: "assignment-1",
+              store: { isActive: true },
+              auditor: {
+                isActive: true,
+                roleAssignments: [{ roleKey: "qc_auditor" }],
+              },
+            },
+          ],
+        }),
+        update: async (args: any) => {
+          updatedStatus = args.data.status;
+          return auditPlanFixture({ status: "open" });
+        },
+      });
+
+      const route = await import("../src/app/api/audit-plans/[id]/publish/route");
+      const result = await route.POST(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        { params: { id: "plan-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(updatedStatus, "open");
+      assert.equal(body.data.status, "open");
+    },
+  },
+  {
+    name: "route audit-plan publish chan plan khong co assignment",
+    run: async () => {
+      setPrismaModel("auditPlan", {
+        findUnique: async () => ({
+          id: "plan-1",
+          status: "draft",
+          startDate: new Date("2026-05-20"),
+          endDate: new Date("2026-05-30"),
+          form: { status: "published" },
+          assignments: [],
+        }),
+      });
+
+      const route = await import("../src/app/api/audit-plans/[id]/publish/route");
+      const result = await route.POST(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        { params: { id: "plan-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Audit plan requires at least one assignment");
+    },
+  },
+  {
+    name: "route audit-plan patch draft sua full assignments",
+    run: async () => {
+      let deletedPlanId = "";
+      let createdAssignments: any[] = [];
+      let updatedData: any = {};
+      setPrismaModel("auditPlan", {
+        findUnique: async () => ({
+          id: "plan-1",
+          status: "draft",
+          formId: "form-1",
+          startDate: new Date("2026-05-20"),
+          endDate: new Date("2026-05-30"),
+        }),
+      });
+      setPrismaModel("checklistForm", {
+        findUnique: async () => ({ id: "form-2", status: "published" }),
+      });
+      setPrismaModel("store", {
+        findMany: async () => [{ id: "store-2" }],
+      });
+      setPrismaModel("user", {
+        findMany: async () => [{ id: "qc-2" }],
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          auditPlan: {
+            update: async (args: any) => {
+              updatedData = args.data;
+              return { id: "plan-1" };
+            },
+            findUniqueOrThrow: async () =>
+              auditPlanFixture({
+                name: "Plan Updated",
+                formId: "form-2",
+                assignments: [
+                  {
+                    id: "assignment-2",
+                    status: "pending",
+                    auditId: null,
+                    storeId: "store-2",
+                    auditorId: "qc-2",
+                    store: { id: "store-2", code: "MC-002", name: "Store 2" },
+                    auditor: { id: "qc-2", fullName: "QC Two", email: "qc2@example.com" },
+                  },
+                ],
+              }),
+          },
+          auditAssignment: {
+            deleteMany: async (args: any) => {
+              deletedPlanId = args.where.planId;
+              return { count: 1 };
+            },
+            createMany: async (args: any) => {
+              createdAssignments = args.data;
+              return { count: args.data.length };
+            },
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audit-plans/[id]/route");
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            name: "Plan Updated",
+            formId: "form-2",
+            startDate: "2026-06-01",
+            endDate: "2026-06-10",
+            assignments: [{ storeId: "store-2", auditorId: "qc-2" }],
+          },
+        }),
+        { params: { id: "plan-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(updatedData.name, "Plan Updated");
+      assert.equal(updatedData.formId, "form-2");
+      assert.equal(deletedPlanId, "plan-1");
+      assert.deepEqual(createdAssignments, [
+        {
+          planId: "plan-1",
+          storeId: "store-2",
+          auditorId: "qc-2",
+          status: "pending",
+        },
+      ]);
+      assert.equal(body.data.assignments[0].auditor.fullName, "QC Two");
+    },
+  },
+  {
+    name: "route audit-plan patch open khong cho doi checklist",
+    run: async () => {
+      setPrismaModel("auditPlan", {
+        findUnique: async () => ({
+          id: "plan-1",
+          status: "open",
+          formId: "form-1",
+          startDate: new Date("2026-05-20"),
+          endDate: new Date("2026-05-30"),
+        }),
+      });
+
+      const route = await import("../src/app/api/audit-plans/[id]/route");
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: { formId: "form-2" },
+        }),
+        { params: { id: "plan-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Open audit plan can only update name and audit window");
+    },
+  },
+  {
+    name: "route audit-plan patch open cho sua audit window",
+    run: async () => {
+      let updatedData: any = {};
+      setPrismaModel("auditPlan", {
+        findUnique: async () => ({
+          id: "plan-1",
+          status: "open",
+          formId: "form-1",
+          startDate: new Date("2026-05-20"),
+          endDate: new Date("2026-05-30"),
+        }),
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          auditPlan: {
+            update: async (args: any) => {
+              updatedData = args.data;
+              return { id: "plan-1" };
+            },
+            findUniqueOrThrow: async () =>
+              auditPlanFixture({
+                status: "open",
+                startDate: new Date("2026-06-01"),
+                endDate: new Date("2026-06-10"),
+              }),
+          },
+          auditAssignment: {
+            deleteMany: async () => ({ count: 0 }),
+            createMany: async () => ({ count: 0 }),
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audit-plans/[id]/route");
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            startDate: "2026-06-01",
+            endDate: "2026-06-10",
+          },
+        }),
+        { params: { id: "plan-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(updatedData.startDate.toISOString(), "2026-06-01T00:00:00.000Z");
+      assert.equal(body.data.startDate, new Date("2026-06-01").toISOString());
+    },
+  },
+  {
+    name: "route audit assignment patch doi QC khi pending",
+    run: async () => {
+      let updatedAuditorId = "";
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          planId: "plan-1",
+          status: "pending",
+          auditId: null,
+          plan: { status: "open" },
+        }),
+        update: async (args: any) => {
+          updatedAuditorId = args.data.auditorId;
+          return { id: args.where.id };
+        },
+      });
+      setPrismaModel("user", {
+        findFirst: async () => ({ id: "qc-2" }),
+      });
+      setPrismaModel("auditPlan", {
+        findUniqueOrThrow: async () =>
+          auditPlanFixture({
+            status: "open",
+            assignments: [
+              {
+                id: "assignment-1",
+                status: "pending",
+                auditId: null,
+                storeId: "store-1",
+                auditorId: "qc-2",
+                store: { id: "store-1", code: "MC-001", name: "Store 1" },
+                auditor: { id: "qc-2", fullName: "QC Two", email: "qc2@example.com" },
+              },
+            ],
+          }),
+      });
+
+      const route = await import(
+        "../src/app/api/audit-plans/[id]/assignments/[assignmentId]/route"
+      );
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: { auditorId: "qc-2" },
+        }),
+        { params: { id: "plan-1", assignmentId: "assignment-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(updatedAuditorId, "qc-2");
+      assert.equal(body.data.assignments[0].auditor.fullName, "QC Two");
+    },
+  },
+  {
+    name: "route audit assignment patch chan assignment dang in_progress",
+    run: async () => {
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          planId: "plan-1",
+          status: "in_progress",
+          auditId: null,
+          plan: { status: "open" },
+        }),
+      });
+
+      const route = await import(
+        "../src/app/api/audit-plans/[id]/assignments/[assignmentId]/route"
+      );
+      const result = await route.PATCH(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: { auditorId: "qc-2" },
+        }),
+        { params: { id: "plan-1", assignmentId: "assignment-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Only pending assignment can be changed");
+    },
+  },
+  {
+    name: "route audit assignment delete chan xoa assignment cuoi khi open",
+    run: async () => {
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          planId: "plan-1",
+          status: "pending",
+          auditId: null,
+          plan: { status: "open" },
+        }),
+        count: async () => 1,
+      });
+
+      const route = await import(
+        "../src/app/api/audit-plans/[id]/assignments/[assignmentId]/route"
+      );
+      const result = await route.DELETE(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        { params: { id: "plan-1", assignmentId: "assignment-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Open audit plan requires at least one assignment");
+    },
+  },
+  {
+    name: "route audit assignment delete xoa pending thanh cong",
+    run: async () => {
+      let deletedAssignmentId = "";
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-1",
+          planId: "plan-1",
+          status: "pending",
+          auditId: null,
+          plan: { status: "draft" },
+        }),
+        delete: async (args: any) => {
+          deletedAssignmentId = args.where.id;
+          return { id: args.where.id };
+        },
+      });
+      setPrismaModel("auditPlan", {
+        findUniqueOrThrow: async () =>
+          auditPlanFixture({
+            assignments: [],
+          }),
+      });
+
+      const route = await import(
+        "../src/app/api/audit-plans/[id]/assignments/[assignmentId]/route"
+      );
+      const result = await route.DELETE(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        { params: { id: "plan-1", assignmentId: "assignment-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(deletedAssignmentId, "assignment-1");
+      assert.equal(body.data.progress.total, 0);
     },
   },
   {
     name: "route my-assignments chi lay assignment cua QC hien tai",
     run: async () => {
       let scopedAuditorId = "";
+      let scopedPlanStatus = "";
       setPrismaModel("auditAssignment", {
         findMany: async (args: any) => {
           scopedAuditorId = args.where.auditorId;
+          scopedPlanStatus = args.where.plan.status;
           return [
             {
               id: "assignment-1",
               status: "pending",
-              scheduledDate: new Date("2026-05-20"),
               auditId: null,
               store: { id: "store-1", code: "MC-001", name: "Store 1" },
               plan: {
                 id: "plan-1",
                 name: "Plan 1",
                 status: "open",
+                startDate: new Date("2026-05-01"),
+                endDate: new Date("2026-05-30"),
                 form: { id: "form-1", name: "Checklist", version: "v1" },
               },
             },
@@ -877,11 +1339,89 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 200);
       assert.equal(scopedAuditorId, "qc-1");
+      assert.equal(scopedPlanStatus, "open");
+      assert.equal(body.data[0].plan.isAuditWindowOpen, true);
       assert.deepEqual(body.data[0].checklist, {
         id: "form-1",
         name: "Checklist",
         version: "v1",
       });
+    },
+  },
+  {
+    name: "route checklist section delete chi cho draft checklist",
+    run: async () => {
+      setPrismaModel("checklistSection", {
+        findUnique: async () => ({
+          id: "section-1",
+          formId: "form-1",
+          form: { status: "published" },
+        }),
+      });
+
+      const route = await import(
+        "../src/app/api/checklists/[id]/sections/[sectionId]/route"
+      );
+      const result = await route.DELETE(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        { params: { id: "form-1", sectionId: "section-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "Only draft checklist can be changed");
+    },
+  },
+  {
+    name: "route checklist item delete xoa dung item va tra checklist detail",
+    run: async () => {
+      let deletedItemId = "";
+      setPrismaModel("checklistSectionItem", {
+        findUnique: async () => ({
+          id: "item-1",
+          sectionId: "section-1",
+          section: {
+            formId: "form-1",
+            form: { status: "draft" },
+          },
+        }),
+        delete: async (args: any) => {
+          deletedItemId = args.where.id;
+          return { id: args.where.id };
+        },
+      });
+      setPrismaModel("checklistForm", {
+        findUniqueOrThrow: async () => ({
+          id: "form-1",
+          name: "Checklist",
+          version: "v1",
+          status: "draft",
+          publishedAt: null,
+          createdAt: new Date("2026-05-01"),
+          updatedAt: new Date("2026-05-02"),
+          sections: [],
+        }),
+      });
+
+      const route = await import(
+        "../src/app/api/checklists/[id]/sections/[sectionId]/items/[itemId]/route"
+      );
+      const result = await route.DELETE(
+        fakeRouteRequest({ roles: ["qa_manager"] }),
+        {
+          params: {
+            id: "form-1",
+            sectionId: "section-1",
+            itemId: "item-1",
+          },
+        }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(deletedItemId, "item-1");
+      assert.equal(body.data.id, "form-1");
+      assert.deepEqual(body.data.sections, []);
     },
   },
 ];

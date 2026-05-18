@@ -7,6 +7,7 @@ import {
   auditPlanCreateSchema,
   auditPlanDetailSelect,
   getValidationMessage,
+  isValidAuditWindow,
   mapAuditPlan,
   parseDate,
   QAM_ROLES,
@@ -43,16 +44,19 @@ export async function POST(request: NextRequest) {
     const auditorIds = Array.from(
       new Set(parsed.data.assignments.map((assignment) => assignment.auditorId))
     );
-    const scheduledDates = parsed.data.assignments.map((assignment) =>
-      parseDate(assignment.scheduledDate)
-    );
+    const startDate = parseDate(parsed.data.startDate);
+    const endDate = parseDate(parsed.data.endDate);
 
     if (!assertUniqueValues(storeIds)) {
       return response.error("Duplicate storeId is not allowed in one audit plan", 400);
     }
 
-    if (scheduledDates.some((date) => !date)) {
-      return response.error("Invalid scheduledDate", 400);
+    if (!startDate || !endDate) {
+      return response.error("Invalid audit window", 400);
+    }
+
+    if (!isValidAuditWindow(startDate, endDate)) {
+      return response.error("startDate must be before or equal to endDate", 400);
     }
 
     const [form, stores, auditors] = await Promise.all([
@@ -102,12 +106,13 @@ export async function POST(request: NextRequest) {
         data: {
           name: parsed.data.name,
           formId: parsed.data.formId,
-          status: "open",
+          status: "draft",
+          startDate,
+          endDate,
           assignments: {
-            create: parsed.data.assignments.map((assignment, index) => ({
+            create: parsed.data.assignments.map((assignment) => ({
               storeId: assignment.storeId,
               auditorId: assignment.auditorId,
-              scheduledDate: scheduledDates[index]!,
               status: "pending",
             })),
           },

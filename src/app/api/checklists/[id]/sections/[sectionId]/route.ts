@@ -85,3 +85,44 @@ export async function PATCH(
     return response.error("Internal server error", 500);
   }
 }
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { id: string; sectionId: string } }
+) {
+  const forbidden = requireRole(request, [...QAM_ROLES]);
+  if (forbidden) return forbidden;
+
+  try {
+    const section = await prisma.checklistSection.findUnique({
+      where: { id: params.sectionId },
+      select: {
+        id: true,
+        formId: true,
+        form: { select: { status: true } },
+      },
+    });
+
+    if (!section || section.formId !== params.id) {
+      return response.error("Checklist section not found", 404);
+    }
+
+    if (section.form.status !== "draft") {
+      return response.error("Only draft checklist can be changed", 400);
+    }
+
+    await prisma.checklistSection.delete({
+      where: { id: params.sectionId },
+    });
+
+    const detail = await prisma.checklistForm.findUniqueOrThrow({
+      where: { id: params.id },
+      select: checklistDetailSelect,
+    });
+
+    return response.success(detail, "Checklist section deleted successfully");
+  } catch (error) {
+    console.error("Delete checklist section error:", error);
+    return response.error("Internal server error", 500);
+  }
+}

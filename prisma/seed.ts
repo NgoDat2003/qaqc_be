@@ -165,8 +165,18 @@ async function main() {
   // 4. GENERATE AUDITS & VIOLATIONS
   // ==========================================
   console.log('Generating Audits & Violations...')
+  const auditStartDate = faker.date.recent({ days: 30 })
+  const auditEndDate = faker.date.soon({ days: 14, refDate: auditStartDate })
   const auditPlan = await prisma.auditPlan.create({
-    data: { name: 'Monthly Company Audit - 2026', type: 'adhoc', scope: 'company', formId: checklist.id, status: 'open' }
+    data: {
+      name: 'Monthly Company Audit - 2026',
+      type: 'adhoc',
+      scope: 'company',
+      formId: checklist.id,
+      status: 'open',
+      startDate: auditStartDate,
+      endDate: auditEndDate
+    }
   })
 
   const auditStores = faker.helpers.shuffle(stores)
@@ -179,7 +189,6 @@ async function main() {
         planId: auditPlan.id,
         storeId: store.id,
         auditorId: qc.id,
-        scheduledDate: faker.date.recent({ days: 30 }),
         status: isCompleted ? 'completed' : 'pending'
       }
     })

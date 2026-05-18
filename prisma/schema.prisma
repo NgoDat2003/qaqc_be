@@ -221,8 +221,10 @@ model AuditPlan {
   scope  String @default("company")
   formId String
   form   ChecklistForm @relation(fields: [formId], references: [id])
-  // "open" | "closed"
-  status String @default("open")
+  // "draft" | "open" | "closed"
+  status String @default("draft")
+  startDate DateTime @default(now())
+  endDate   DateTime @default(now())
 
   assignments AuditAssignment[]
 
@@ -231,6 +233,8 @@ model AuditPlan {
 
   @@index([status])
   @@index([formId])
+  @@index([startDate, endDate])
+  @@index([createdAt])
   @@map("audit_plans")
 }
 
@@ -242,7 +246,8 @@ model AuditAssignment {
   store         Store     @relation(fields: [storeId], references: [id])
   auditorId     String
   auditor       User      @relation("AssignmentAuditor", fields: [auditorId], references: [id])
-  scheduledDate DateTime
+  // Deprecated: audit window now lives on AuditPlan.
+  scheduledDate DateTime?
   // "pending" | "in_progress" | "completed"
   status        String    @default("pending")
   // filled after QC submits audit
@@ -254,8 +259,10 @@ model AuditAssignment {
 
   @@unique([planId, storeId])
   @@index([planId])
+  @@index([planId, createdAt])
   @@index([storeId])
   @@index([auditorId])
+  @@index([auditorId, createdAt])
   @@index([status])
   @@map("audit_assignments")
 }

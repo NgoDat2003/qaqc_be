@@ -151,7 +151,8 @@ API đề xuất:
 | `POST` | `/api/checklists/[id]/sections` | thêm section |
 | `PATCH` | `/api/checklists/[id]/sections/[sectionId]` | sửa name/group/weight/order |
 | `POST` | `/api/checklists/[id]/sections/[sectionId]/items` | thêm criteria vào section |
-| `DELETE` hoặc `PATCH` | section/item | có thể để sau nếu FE chưa cần |
+| `DELETE` | `/api/checklists/[id]/sections/[sectionId]` | xóa section khỏi draft checklist |
+| `DELETE` | `/api/checklists/[id]/sections/[sectionId]/items/[itemId]` | xóa criteria khỏi section |
 
 DTO checklist detail:
 
@@ -243,10 +244,11 @@ Create body:
 type CreateAuditPlanBody = {
   name: string
   formId: string
+  startDate: string
+  endDate: string
   assignments: Array<{
     storeId: string
     auditorId: string
-    scheduledDate: string
   }>
 }
 ```
@@ -292,9 +294,8 @@ Response:
 type MyAssignment = {
   id: string
   status: "pending" | "in_progress" | "completed"
-  scheduledDate: string
   store: { id: string; code: string; name: string }
-  plan: { id: string; name: string; status: string }
+  plan: { id: string; name: string; status: string; startDate: string; endDate: string; isAuditWindowOpen: boolean }
   checklist: { id: string; name: string; version: string }
   auditId: string | null
 }
