@@ -6,6 +6,7 @@ import {
   criteriaSelect,
   criteriaUpdateSchema,
   getValidationMessage,
+  normalizeCriteriaUpdateInput,
   QAM_ROLES,
 } from "@/lib/qam";
 
@@ -26,8 +27,10 @@ export async function PATCH(
       where: { id: params.id },
       select: {
         id: true,
+        groupId: true,
         deductionPerError: true,
         maxDeduction: true,
+        flag: true,
       },
     });
 
@@ -35,9 +38,14 @@ export async function PATCH(
       return response.error("Criteria not found", 404);
     }
 
-    if (parsed.data.groupId) {
+    const input = normalizeCriteriaUpdateInput(parsed.data, existing);
+    if ("error" in input && typeof input.error === "string") {
+      return response.error(input.error, 400);
+    }
+
+    if (input.groupId) {
       const group = await prisma.criteriaGroup.findFirst({
-        where: { id: parsed.data.groupId, isActive: true },
+        where: { id: input.groupId, isActive: true },
         select: { id: true },
       });
       if (!group) {
@@ -45,18 +53,9 @@ export async function PATCH(
       }
     }
 
-    const nextDeduction = parsed.data.deductionPerError ?? existing.deductionPerError;
-    const nextMax = parsed.data.maxDeduction ?? existing.maxDeduction;
-    if (nextMax < nextDeduction) {
-      return response.error(
-        "maxDeduction must be greater than or equal to deductionPerError",
-        400
-      );
-    }
-
     const criteria = await prisma.criteria.update({
       where: { id: params.id },
-      data: parsed.data,
+      data: input as any,
       select: criteriaSelect,
     });
 

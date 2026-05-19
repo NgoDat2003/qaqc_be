@@ -32,6 +32,16 @@ export const criteriaSelect = {
   },
 } as const;
 
+const optionalGroupIdSchema = z.preprocess(
+  (value) => (value === "" ? null : value),
+  z.string().trim().min(1).nullable().optional()
+);
+
+const scoringFieldsSchema = z.object({
+  deductionPerError: z.number().nonnegative().optional(),
+  maxDeduction: z.number().nonnegative().optional(),
+});
+
 export const checklistListSelect = {
   id: true,
   name: true,
@@ -185,32 +195,151 @@ export const criteriaGroupUpdateSchema = z.object({
 export const criteriaCreateSchema = z.object({
   code: z.string().trim().min(1).max(50).transform((value) => value.toUpperCase()),
   content: z.string().trim().min(3).max(1000),
-  groupId: z.string().trim().min(1),
-  deductionPerError: z.number().positive(),
-  maxDeduction: z.number().positive(),
+  groupId: optionalGroupIdSchema,
+  deductionPerError: scoringFieldsSchema.shape.deductionPerError,
+  maxDeduction: scoringFieldsSchema.shape.maxDeduction,
   flag: z.enum(["none", "critical", "risk"]).default("none"),
   isActive: z.boolean().optional(),
-}).refine((data) => data.maxDeduction >= data.deductionPerError, {
-  message: "maxDeduction must be greater than or equal to deductionPerError",
+}).superRefine((data, ctx) => {
+  if (data.flag === "risk") {
+    return;
+  }
+
+  if (!data.groupId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["groupId"],
+      message: "Criteria group is required for normal and CCP criteria",
+    });
+  }
+
+  if (data.flag === "critical") {
+    return;
+  }
+
+  if (data.deductionPerError === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["deductionPerError"],
+      message: "deductionPerError is required for normal criteria",
+    });
+  }
+
+  if (data.maxDeduction === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["maxDeduction"],
+      message: "maxDeduction is required for normal criteria",
+    });
+  }
+
+  if (
+    data.deductionPerError !== undefined &&
+    data.maxDeduction !== undefined &&
+    data.maxDeduction < data.deductionPerError
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["maxDeduction"],
+      message: "maxDeduction must be greater than or equal to deductionPerError",
+    });
+  }
 });
 
 export const criteriaUpdateSchema = z.object({
   content: z.string().trim().min(3).max(1000).optional(),
-  groupId: z.string().trim().min(1).optional(),
-  deductionPerError: z.number().positive().optional(),
-  maxDeduction: z.number().positive().optional(),
+  groupId: optionalGroupIdSchema,
+  deductionPerError: scoringFieldsSchema.shape.deductionPerError,
+  maxDeduction: scoringFieldsSchema.shape.maxDeduction,
   flag: z.enum(["none", "critical", "risk"]).optional(),
   isActive: z.boolean().optional(),
 }).refine((data) => Object.keys(data).length > 0, {
   message: "At least one field is required",
-}).refine((data) => {
-  if (data.maxDeduction === undefined || data.deductionPerError === undefined) {
-    return true;
-  }
-  return data.maxDeduction >= data.deductionPerError;
-}, {
-  message: "maxDeduction must be greater than or equal to deductionPerError",
 });
+
+export function normalizeCriteriaCreateInput(data: z.infer<typeof criteriaCreateSchema>) {
+  if (data.flag === "risk") {
+    return {
+      ...data,
+      groupId: null,
+      deductionPerError: 0,
+      maxDeduction: 0,
+    };
+  }
+
+  if (data.flag === "critical") {
+    return {
+      ...data,
+      deductionPerError: 0,
+      maxDeduction: 0,
+    };
+  }
+
+  return {
+    ...data,
+    groupId: data.groupId!,
+    deductionPerError: data.deductionPerError!,
+    maxDeduction: data.maxDeduction!,
+  };
+}
+
+export function normalizeCriteriaUpdateInput(
+  data: z.infer<typeof criteriaUpdateSchema>,
+  existing: {
+    groupId: string | null;
+    deductionPerError: number;
+    maxDeduction: number;
+    flag: string;
+  }
+) {
+  const nextFlag = data.flag ?? existing.flag;
+
+  if (nextFlag === "risk") {
+    return {
+      ...data,
+      groupId: null,
+      deductionPerError: 0,
+      maxDeduction: 0,
+    };
+  }
+
+  const nextGroupId = data.groupId ?? existing.groupId;
+  if (!nextGroupId) {
+    return {
+      error: "Criteria group is required for normal and CCP criteria",
+    } as const;
+  }
+
+  if (nextFlag === "critical") {
+    return {
+      ...data,
+      groupId: nextGroupId,
+      deductionPerError: 0,
+      maxDeduction: 0,
+    };
+  }
+
+  const nextDeduction = data.deductionPerError ?? existing.deductionPerError;
+  const nextMax = data.maxDeduction ?? existing.maxDeduction;
+  if (nextDeduction <= 0) {
+    return { error: "deductionPerError is required for normal criteria" } as const;
+  }
+  if (nextMax <= 0) {
+    return { error: "maxDeduction is required for normal criteria" } as const;
+  }
+  if (nextMax < nextDeduction) {
+    return {
+      error: "maxDeduction must be greater than or equal to deductionPerError",
+    } as const;
+  }
+
+  return {
+    ...data,
+    groupId: nextGroupId,
+    deductionPerError: nextDeduction,
+    maxDeduction: nextMax,
+  };
+}
 
 export const checklistCreateSchema = z.object({
   name: z.string().trim().min(2).max(150),

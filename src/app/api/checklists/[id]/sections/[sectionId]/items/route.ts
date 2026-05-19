@@ -37,6 +37,7 @@ export async function POST(
         select: {
           id: true,
           groupId: true,
+          flag: true,
         },
       }),
     ]);
@@ -51,6 +52,10 @@ export async function POST(
 
     if (!criteria) {
       return response.error("Criteria not found or inactive", 400);
+    }
+
+    if (criteria.flag === "risk") {
+      return response.error("Risk criteria are global and cannot be added to a group section", 400);
     }
 
     if (criteria.groupId !== section.groupId) {

@@ -93,6 +93,7 @@ type AuditHistoryBundleResponse = {
   store: { id: string; code: string; name: string }
   historiesByCriteriaId: Record<string, {
     criteriaId: string
+    // 0 = loi moi, 1/2/3 = so lan lap trong chu ky hien tai
     repeatCount: number
     repeatLabel: "first" | "second" | "third" | "auto_ccp" | "reset"
     isCriticalTriggered: boolean
@@ -109,6 +110,16 @@ type AuditHistoryBundleResponse = {
 ```
 
 Khi user bam vao mot tieu chi, FE doc tu `historiesByCriteriaId[criteriaId]`.
+
+Quy uoc hien tai:
+
+| repeatCount | repeatLabel | UI goi y |
+|---:|---|---|
+| `0` | `first` | Loi moi |
+| `1` | `second` | Lap lan 1 |
+| `2` | `third` | Lap lan 2 |
+| `3` | `auto_ccp` | Lap lan 3 - tu dong CCP |
+| `0` | `reset` | Chu ky moi sau auto CCP |
 
 ## 3. Luu Nhap
 
@@ -191,6 +202,7 @@ type SubmitAuditResponse = {
   repeatInfo: Array<{
     criteriaId: string
     numErrors: number
+    // 0 = loi moi, 1/2/3 = so lan lap trong chu ky hien tai
     repeatCount: number
     repeatLabel: "first" | "second" | "third" | "auto_ccp" | "reset"
     isCriticalTriggered: boolean

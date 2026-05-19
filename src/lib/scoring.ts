@@ -2,7 +2,7 @@ export type RepeatLabel = "first" | "second" | "third" | "auto_ccp" | "reset";
 
 export type ScoringCriteria = {
   id: string;
-  groupId: string;
+  groupId: string | null;
   groupCode: string;
   deductionPerError: number;
   maxDeduction: number;
@@ -79,11 +79,17 @@ export function calculateAuditScore({
 
     if (criterion.flag === "risk") {
       isRiskTriggered = true;
+      continue;
     }
 
     if (criterion.flag === "critical" || violation.isCriticalTriggered) {
-      criticalGroups.add(criterion.groupId);
+      if (criterion.groupId) {
+        criticalGroups.add(criterion.groupId);
+      }
+      continue;
     }
+
+    if (!criterion.groupId) continue;
 
     const rawDeduction =
       violation.numErrors *

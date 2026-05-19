@@ -159,6 +159,7 @@ export async function PATCH(request: NextRequest) {
             auditId,
             criteriaId: violation.criteriaId,
             numErrors: violation.numErrors,
+            repeatCount: 0,
             note: violation.note ?? null,
           },
           select: { id: true },

@@ -6,6 +6,7 @@ import {
   criteriaCreateSchema,
   criteriaSelect,
   getValidationMessage,
+  normalizeCriteriaCreateInput,
   QAM_ROLES,
 } from "@/lib/qam";
 
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
         isActive,
       },
       select: criteriaSelect,
-      orderBy: [{ group: { code: "asc" } }, { code: "asc" }],
+      orderBy: { code: "asc" },
     });
 
     return response.success(criteria);
@@ -52,27 +53,30 @@ export async function POST(request: NextRequest) {
       return response.error(getValidationMessage(parsed.error), 400);
     }
 
+    const input = normalizeCriteriaCreateInput(parsed.data);
     const [duplicate, group] = await Promise.all([
       prisma.criteria.findUnique({
-        where: { code: parsed.data.code },
+        where: { code: input.code },
         select: { id: true },
       }),
-      prisma.criteriaGroup.findFirst({
-        where: { id: parsed.data.groupId, isActive: true },
-        select: { id: true },
-      }),
+      input.groupId
+        ? prisma.criteriaGroup.findFirst({
+            where: { id: input.groupId, isActive: true },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
     ]);
 
     if (duplicate) {
       return response.error("Criteria code already exists", 400);
     }
 
-    if (!group) {
+    if (input.groupId && !group) {
       return response.error("Criteria group not found or inactive", 400);
     }
 
     const criteria = await prisma.criteria.create({
-      data: parsed.data,
+      data: input as any,
       select: criteriaSelect,
     });
 

@@ -25,7 +25,7 @@ Tai lieu nay tong hop trang thai hien tai cua luong `qc_auditor` de chu du an va
 1. QC khong duoc xem diem preview truoc khi submit.
 2. QC khong gui `repeatCount`, `finalScore`, `grade`, `groupScores`.
 3. Repeat do BE tu tinh theo `store + criteria` va chi dua tren audit da submit.
-4. Lan lap thu 4 tu dong kich hoat CCP cho group; chu ky sau reset ve lan 1.
+4. `repeatCount` tra ve theo zero-based: `0` la loi moi, `1/2/3` la so lan lap; `3` tu dong kich hoat CCP cho group; chu ky sau reset ve `0`.
 5. RISK lam diem toan bai ve `0` va grade thanh `alarm`.
 6. Anh bang chung gan theo tung loi, khong phai theo toan bai.
 7. Sau submit, man QC chi doc; neu can sua lai bai thi do la luong sau cua SM/QAM, khong phai QC.
@@ -94,12 +94,23 @@ type SubmitAuditResponse = {
   repeatInfo: Array<{
     criteriaId: string
     numErrors: number
+    // 0 = loi moi, 1/2/3 = so lan lap trong chu ky hien tai
     repeatCount: number
     repeatLabel: "first" | "second" | "third" | "auto_ccp" | "reset"
     isCriticalTriggered: boolean
   }>
 }
 ```
+
+Quy uoc hien thi:
+
+| repeatCount | repeatLabel | Y nghia |
+|---:|---|---|
+| `0` | `first` | loi moi |
+| `1` | `second` | lap lan 1 |
+| `2` | `third` | lap lan 2 |
+| `3` | `auto_ccp` | lap lan 3, auto CCP |
+| `0` | `reset` | reset chu ky |
 
 ## Loi FE Nen Xu Ly Rieng
 

@@ -121,25 +121,25 @@ export function getRepeatState(previousViolationCount: number): {
   repeatLabel: RepeatLabel;
   isCriticalTriggered: boolean;
 } {
-  const occurrence = (previousViolationCount % 5) + 1;
+  const cycleIndex = previousViolationCount % 5;
 
-  if (occurrence === 2) {
-    return { repeatCount: 2, repeatLabel: "second", isCriticalTriggered: false };
+  if (cycleIndex === 1) {
+    return { repeatCount: 1, repeatLabel: "second", isCriticalTriggered: false };
   }
 
-  if (occurrence === 3) {
-    return { repeatCount: 3, repeatLabel: "third", isCriticalTriggered: false };
+  if (cycleIndex === 2) {
+    return { repeatCount: 2, repeatLabel: "third", isCriticalTriggered: false };
   }
 
-  if (occurrence === 4) {
-    return { repeatCount: 4, repeatLabel: "auto_ccp", isCriticalTriggered: true };
+  if (cycleIndex === 3) {
+    return { repeatCount: 3, repeatLabel: "auto_ccp", isCriticalTriggered: true };
   }
 
-  if (occurrence === 5) {
-    return { repeatCount: 1, repeatLabel: "reset", isCriticalTriggered: false };
+  if (cycleIndex === 4) {
+    return { repeatCount: 0, repeatLabel: "reset", isCriticalTriggered: false };
   }
 
-  return { repeatCount: 1, repeatLabel: "first", isCriticalTriggered: false };
+  return { repeatCount: 0, repeatLabel: "first", isCriticalTriggered: false };
 }
 
 export function getChecklistCriteria(assignment: AuditAssignmentSession) {

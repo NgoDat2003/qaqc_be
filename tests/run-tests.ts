@@ -10,6 +10,7 @@ import {
   invalidateAdminCache,
   readAdminCache,
 } from "../src/lib/admin-cache";
+import { getRepeatState } from "../src/lib/audit";
 import { calculateAuditScore } from "../src/lib/scoring";
 
 const originalResolveFilename = (Module as any)._resolveFilename;
@@ -138,6 +139,36 @@ const tests: TestCase[] = [
           message: "bad request",
           code: "BAD_REQUEST",
         },
+      });
+    },
+  },
+  {
+    name: "repeat state dung zero-based repeat count",
+    run: () => {
+      assert.deepEqual(getRepeatState(0), {
+        repeatCount: 0,
+        repeatLabel: "first",
+        isCriticalTriggered: false,
+      });
+      assert.deepEqual(getRepeatState(1), {
+        repeatCount: 1,
+        repeatLabel: "second",
+        isCriticalTriggered: false,
+      });
+      assert.deepEqual(getRepeatState(2), {
+        repeatCount: 2,
+        repeatLabel: "third",
+        isCriticalTriggered: false,
+      });
+      assert.deepEqual(getRepeatState(3), {
+        repeatCount: 3,
+        repeatLabel: "auto_ccp",
+        isCriticalTriggered: true,
+      });
+      assert.deepEqual(getRepeatState(4), {
+        repeatCount: 0,
+        repeatLabel: "reset",
+        isCriticalTriggered: false,
       });
     },
   },
@@ -697,6 +728,166 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 400);
       assert.equal(body.error.message, "Criteria group not found or inactive");
+    },
+  },
+  {
+    name: "route criteria create cho phep ccp khong gui dbase dmax",
+    run: async () => {
+      let createdData: any = null;
+      setPrismaModel("criteria", {
+        findUnique: async () => null,
+        create: async (args: any) => {
+          createdData = args.data;
+          return {
+            id: "criteria-ccp",
+            ...args.data,
+            group: { id: "group-c", code: "C", name: "Cleanliness" },
+            createdAt: new Date("2026-05-01"),
+            updatedAt: new Date("2026-05-02"),
+          };
+        },
+      });
+      setPrismaModel("criteriaGroup", {
+        findFirst: async () => ({ id: "group-c" }),
+      });
+
+      const route = await import("../src/app/api/criteria/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            code: "ccp-001",
+            content: "Loi CCP lam mat diem nhom",
+            groupId: "group-c",
+            flag: "critical",
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 201);
+      assert.equal(createdData.deductionPerError, 0);
+      assert.equal(createdData.maxDeduction, 0);
+      assert.equal(body.data.flag, "critical");
+    },
+  },
+  {
+    name: "route criteria create cho phep risk global khong chon group",
+    run: async () => {
+      let groupLookupCalled = false;
+      let createdData: any = null;
+      setPrismaModel("criteria", {
+        findUnique: async () => null,
+        create: async (args: any) => {
+          createdData = args.data;
+          return {
+            id: "criteria-risk",
+            ...args.data,
+            group: null,
+            createdAt: new Date("2026-05-01"),
+            updatedAt: new Date("2026-05-02"),
+          };
+        },
+      });
+      setPrismaModel("criteriaGroup", {
+        findFirst: async () => {
+          groupLookupCalled = true;
+          return null;
+        },
+      });
+
+      const route = await import("../src/app/api/criteria/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            code: "risk-001",
+            content: "Loi risk lam diem toan bai ve 0",
+            flag: "risk",
+            groupId: "",
+            deductionPerError: 0,
+            maxDeduction: 0,
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 201);
+      assert.equal(groupLookupCalled, false);
+      assert.equal(createdData.groupId, null);
+      assert.equal(createdData.deductionPerError, 0);
+      assert.equal(createdData.maxDeduction, 0);
+      assert.equal(body.data.group, null);
+    },
+  },
+  {
+    name: "route criteria create cho phep risk global groupId null",
+    run: async () => {
+      let groupLookupCalled = false;
+      let createdData: any = null;
+      setPrismaModel("criteria", {
+        findUnique: async () => null,
+        create: async (args: any) => {
+          createdData = args.data;
+          return {
+            id: "criteria-risk-null",
+            ...args.data,
+            group: null,
+            createdAt: new Date("2026-05-01"),
+            updatedAt: new Date("2026-05-02"),
+          };
+        },
+      });
+      setPrismaModel("criteriaGroup", {
+        findFirst: async () => {
+          groupLookupCalled = true;
+          return null;
+        },
+      });
+
+      const route = await import("../src/app/api/criteria/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            code: "risk-002",
+            content: "Loi risk global khong can nhom",
+            flag: "risk",
+            groupId: null,
+            deductionPerError: 0,
+            maxDeduction: 0,
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 201);
+      assert.equal(groupLookupCalled, false);
+      assert.equal(createdData.groupId, null);
+      assert.equal(createdData.deductionPerError, 0);
+      assert.equal(createdData.maxDeduction, 0);
+      assert.equal(body.data.group, null);
+    },
+  },
+  {
+    name: "route criteria create bat dbase dmax cho tieu chi thuong",
+    run: async () => {
+      const route = await import("../src/app/api/criteria/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            code: "normal-001",
+            content: "Loi thuong can diem tru",
+            groupId: "group-c",
+            flag: "none",
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(body.error.message, "deductionPerError is required for normal criteria");
     },
   },
   {
@@ -1375,6 +1566,55 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "route checklist item create chan add risk vao section group",
+    run: async () => {
+      let duplicateLookupCalled = false;
+      setPrismaModel("checklistSection", {
+        findUnique: async () => ({
+          id: "section-1",
+          formId: "form-1",
+          groupId: "group-c",
+          form: { status: "draft" },
+        }),
+      });
+      setPrismaModel("criteria", {
+        findFirst: async () => ({
+          id: "criteria-risk",
+          groupId: null,
+          flag: "risk",
+        }),
+      });
+      setPrismaModel("checklistSectionItem", {
+        findUnique: async () => {
+          duplicateLookupCalled = true;
+          return null;
+        },
+      });
+
+      const route = await import(
+        "../src/app/api/checklists/[id]/sections/[sectionId]/items/route"
+      );
+      const result = await route.POST(
+        fakeRouteRequest({
+          roles: ["qa_manager"],
+          body: {
+            criteriaId: "criteria-risk",
+            order: 1,
+          },
+        }),
+        { params: { id: "form-1", sectionId: "section-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(duplicateLookupCalled, false);
+      assert.equal(
+        body.error.message,
+        "Risk criteria are global and cannot be added to a group section"
+      );
+    },
+  },
+  {
     name: "route checklist item delete xoa dung item va tra checklist detail",
     run: async () => {
       let deletedItemId = "";
@@ -1447,8 +1687,8 @@ const tests: TestCase[] = [
             id: "criteria-h",
             groupId: "group-h",
             groupCode: "H",
-            deductionPerError: 1,
-            maxDeduction: 5,
+            deductionPerError: 0,
+            maxDeduction: 0,
             flag: "critical",
           },
         ],
@@ -1456,14 +1696,14 @@ const tests: TestCase[] = [
           {
             criteriaId: "criteria-c",
             numErrors: 2,
-            repeatCount: 2,
+            repeatCount: 1,
             repeatLabel: "second",
             isCriticalTriggered: false,
           },
           {
             criteriaId: "criteria-h",
             numErrors: 1,
-            repeatCount: 1,
+            repeatCount: 0,
             repeatLabel: "first",
             isCriticalTriggered: false,
           },
@@ -1478,10 +1718,10 @@ const tests: TestCase[] = [
         criteria: [
           {
             id: "criteria-risk",
-            groupId: "group-c",
-            groupCode: "C",
-            deductionPerError: 1,
-            maxDeduction: 5,
+            groupId: null,
+            groupCode: "",
+            deductionPerError: 0,
+            maxDeduction: 0,
             flag: "risk",
           },
         ],
@@ -1489,7 +1729,7 @@ const tests: TestCase[] = [
           {
             criteriaId: "criteria-risk",
             numErrors: 1,
-            repeatCount: 1,
+            repeatCount: 0,
             repeatLabel: "first",
             isCriticalTriggered: false,
           },
@@ -1617,8 +1857,8 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 200);
       assert.equal(violationCalls, 1);
-      assert.equal(body.data.historiesByCriteriaId["criteria-1"].repeatCount, 2);
-      assert.equal(body.data.historiesByCriteriaId["criteria-2"].repeatCount, 1);
+      assert.equal(body.data.historiesByCriteriaId["criteria-1"].repeatCount, 1);
+      assert.equal(body.data.historiesByCriteriaId["criteria-2"].repeatCount, 0);
       assert.equal(
         body.data.historiesByCriteriaId["criteria-1"].history[0].images[0].id,
         "img-1"
@@ -1913,6 +2153,7 @@ const tests: TestCase[] = [
       const body = await responseJson(result);
 
       assert.equal(result.status, 200);
+      assert.equal(body.data.repeatInfo[0].repeatCount, 3);
       assert.equal(body.data.repeatInfo[0].repeatLabel, "auto_ccp");
       assert.equal(actionPlanCreated, true);
     },

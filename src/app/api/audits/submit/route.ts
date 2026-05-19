@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
             auditId,
             criteriaId: violation.criteriaId,
             numErrors: violation.numErrors,
-            repeatCount: repeat?.repeatCount ?? 1,
+            repeatCount: repeat?.repeatCount ?? 0,
             isCriticalTriggered: repeat?.isCriticalTriggered ?? false,
             isRiskTriggered: criterion.criterion.flag === "risk" && violation.numErrors > 0,
             note: violation.note ?? null,

@@ -9,7 +9,7 @@ Tai lieu nay chi mo ta nhung API FE can de lam man hinh QAM cau hinh criteria, c
 | Man hinh | API chinh | Ghi chu |
 |---|---|---|
 | Quan ly nhom tieu chi | `GET/POST/PATCH /api/criteria-groups` | Group chi la CHEP, khong co trong so co dinh |
-| Quan ly tieu chi | `GET/POST/PATCH /api/criteria` | Tieu chi bat buoc nam trong group; `risk` van la loi toan bai |
+| Quan ly tieu chi | `GET/POST/PATCH /api/criteria` | `none` can group + dbase/dmax, `critical` can group nhung khong can dbase/dmax, `risk` la global khong chon group |
 | Checklist builder | `/api/checklists...` | Trong so nam tren tung section, tong section weight phai bang `100` moi publish |
 | Danh sach ke hoach audit | `GET /api/audit-plans` | Tra full plan kem assignments/progress |
 | Tao/chinh sua ke hoach audit | `POST/PATCH /api/audit-plans` | Tao moi luon la `draft`; luu nhap dung `PATCH` |
@@ -107,8 +107,8 @@ type CriteriaItem = {
   id: string
   code: string
   content: string
-  groupId: string
-  group: { id: string; code: string; name: string }
+  groupId: string | null
+  group: { id: string; code: string; name: string } | null
   deductionPerError: number
   maxDeduction: number
   flag: "none" | "critical" | "risk"
@@ -124,26 +124,38 @@ type CriteriaItem = {
 type Body = {
   code: string
   content: string
-  groupId: string
-  deductionPerError: number
-  maxDeduction: number
-  flag?: "none" | "critical" | "risk"
-  isActive?: boolean
-}
-```
-
-### `PATCH /api/criteria/:id`
-
-```ts
-type Body = {
-  content?: string
-  groupId?: string
+  groupId?: string | null
   deductionPerError?: number
   maxDeduction?: number
   flag?: "none" | "critical" | "risk"
   isActive?: boolean
 }
 ```
+
+Rule:
+
+- `flag="none"`: bat buoc co `groupId`, `deductionPerError`, `maxDeduction`.
+- `flag="critical"`: bat buoc co `groupId`, khong can gui `deductionPerError/maxDeduction`; BE luu `0/0` va khi audit se cho diem nhom do ve `0`.
+- `flag="risk"`: khong gui `groupId`, khong can gui `deductionPerError/maxDeduction`; BE luu `groupId=null`, `0/0` va khi audit se cho diem toan bai ve `0`.
+
+### `PATCH /api/criteria/:id`
+
+```ts
+type Body = {
+  content?: string
+  groupId?: string | null
+  deductionPerError?: number
+  maxDeduction?: number
+  flag?: "none" | "critical" | "risk"
+  isActive?: boolean
+}
+```
+
+Rule update giong create:
+
+- Doi sang `critical` thi BE tu reset `deductionPerError/maxDeduction` ve `0/0`.
+- Doi sang `risk` thi BE tu clear `groupId` ve `null` va reset diem tru ve `0/0`.
+- Doi ve `none` thi phai co group va scoring config hop le.
 
 ## Checklists
 
