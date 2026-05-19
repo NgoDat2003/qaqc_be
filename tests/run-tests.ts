@@ -12,6 +12,7 @@ import {
 } from "../src/lib/admin-cache";
 import { getRepeatState } from "../src/lib/audit";
 import { calculateAuditScore } from "../src/lib/scoring";
+import { buildAuditScoreBreakdown } from "../src/lib/audit-score-breakdown";
 
 const originalResolveFilename = (Module as any)._resolveFilename;
 (Module as any)._resolveFilename = function resolveAlias(
@@ -1710,7 +1711,7 @@ const tests: TestCase[] = [
         ],
       });
 
-      assert.equal(normal.finalScore, 46);
+      assert.equal(normal.finalScore, 10);
       assert.equal(normal.groupScores[1].triggeredCritical, true);
 
       const risk = calculateAuditScore({
@@ -1738,6 +1739,352 @@ const tests: TestCase[] = [
 
       assert.equal(risk.finalScore, 0);
       assert.equal(risk.grade, "alarm");
+    },
+  },
+  {
+    name: "scoring dung diem chuan raw theo maxDeduction cua Excel",
+    run: () => {
+      const score = calculateAuditScore({
+        groups: [
+          { id: "group-c", code: "C", weight: 35 },
+          { id: "group-h", code: "H", weight: 10 },
+        ],
+        criteria: [
+          {
+            id: "c1",
+            groupId: "group-c",
+            groupCode: "C",
+            deductionPerError: 3,
+            maxDeduction: 6,
+            flag: "none",
+          },
+          {
+            id: "c2",
+            groupId: "group-c",
+            groupCode: "C",
+            deductionPerError: 5,
+            maxDeduction: 10,
+            flag: "none",
+          },
+          {
+            id: "h1",
+            groupId: "group-h",
+            groupCode: "H",
+            deductionPerError: 3,
+            maxDeduction: 6,
+            flag: "none",
+          },
+        ],
+        violations: [
+          {
+            criteriaId: "c1",
+            numErrors: 1,
+            repeatCount: 0,
+            repeatLabel: "first",
+            isCriticalTriggered: false,
+          },
+        ],
+      });
+
+      assert.equal(score.groupScores[0].maxScore, 16);
+      assert.equal(score.groupScores[0].reachedScore, 13);
+      assert.equal(score.groupScores[0].percentage, 81.25);
+      assert.equal(score.groupScores[1].maxScore, 6);
+      assert.equal(score.finalScore, 38.44);
+    },
+  },
+  {
+    name: "score breakdown tra chi tiet tru diem theo group va risk",
+    run: () => {
+      const audit: any = {
+        finalScore: 0,
+        grade: "alarm",
+        isRiskTriggered: true,
+        form: {
+          sections: [
+            {
+              id: "section-a",
+              weight: 40,
+              group: { id: "group-a", code: "A", name: "An toan", weight: 40 },
+              items: [
+                {
+                  criteria: {
+                    id: "criteria-a1",
+                    code: "A1",
+                    content: "Loi thuong",
+                    flag: "none",
+                    groupId: "group-a",
+                    deductionPerError: 2,
+                    maxDeduction: 10,
+                    group: { id: "group-a", code: "A", name: "An toan" },
+                  },
+                },
+                {
+                  criteria: {
+                    id: "criteria-a2",
+                    code: "A2",
+                    content: "Loi CCP",
+                    flag: "critical",
+                    groupId: "group-a",
+                    deductionPerError: 0,
+                    maxDeduction: 0,
+                    group: { id: "group-a", code: "A", name: "An toan" },
+                  },
+                },
+              ],
+            },
+            {
+              id: "section-b",
+              weight: 60,
+              group: { id: "group-b", code: "B", name: "Dich vu", weight: 60 },
+              items: [
+                {
+                  criteria: {
+                    id: "criteria-b1",
+                    code: "B1",
+                    content: "Loi lap",
+                    flag: "none",
+                    groupId: "group-b",
+                    deductionPerError: 3,
+                    maxDeduction: 12,
+                    group: { id: "group-b", code: "B", name: "Dich vu" },
+                  },
+                },
+                {
+                  criteria: {
+                    id: "criteria-risk",
+                    code: "R1",
+                    content: "Risk",
+                    flag: "risk",
+                    groupId: null,
+                    deductionPerError: 0,
+                    maxDeduction: 0,
+                    group: null,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        groupScores: [
+          {
+            groupId: "group-a",
+            groupCode: "A",
+            weight: 40,
+            maxScore: 100,
+            reachedScore: 0,
+            percentage: 0,
+            triggeredCritical: true,
+          },
+          {
+            groupId: "group-b",
+            groupCode: "B",
+            weight: 60,
+            maxScore: 100,
+            reachedScore: 91,
+            percentage: 91,
+            triggeredCritical: false,
+          },
+        ],
+        violations: [
+          {
+            id: "violation-a1",
+            numErrors: 2,
+            repeatCount: 0,
+            isCriticalTriggered: false,
+            isRiskTriggered: false,
+            note: "normal",
+            evidences: [{ id: "img-1", url: "/img.jpg" }],
+            criteria: {
+              id: "criteria-a1",
+              code: "A1",
+              content: "Loi thuong",
+              flag: "none",
+              groupId: "group-a",
+              deductionPerError: 2,
+              maxDeduction: 10,
+              group: { id: "group-a", code: "A", name: "An toan" },
+            },
+          },
+          {
+            id: "violation-a2",
+            numErrors: 1,
+            repeatCount: 0,
+            isCriticalTriggered: false,
+            isRiskTriggered: false,
+            note: "ccp",
+            evidences: [],
+            criteria: {
+              id: "criteria-a2",
+              code: "A2",
+              content: "Loi CCP",
+              flag: "critical",
+              groupId: "group-a",
+              deductionPerError: 0,
+              maxDeduction: 0,
+              group: { id: "group-a", code: "A", name: "An toan" },
+            },
+          },
+          {
+            id: "violation-b1",
+            numErrors: 1,
+            repeatCount: 2,
+            isCriticalTriggered: false,
+            isRiskTriggered: false,
+            note: "repeat",
+            evidences: [],
+            criteria: {
+              id: "criteria-b1",
+              code: "B1",
+              content: "Loi lap",
+              flag: "none",
+              groupId: "group-b",
+              deductionPerError: 3,
+              maxDeduction: 12,
+              group: { id: "group-b", code: "B", name: "Dich vu" },
+            },
+          },
+          {
+            id: "violation-risk",
+            numErrors: 1,
+            repeatCount: 0,
+            isCriticalTriggered: false,
+            isRiskTriggered: true,
+            note: "risk",
+            evidences: [],
+            criteria: {
+              id: "criteria-risk",
+              code: "R1",
+              content: "Risk",
+              flag: "risk",
+              groupId: null,
+              deductionPerError: 0,
+              maxDeduction: 0,
+              group: null,
+            },
+          },
+        ],
+      };
+
+      const breakdown = buildAuditScoreBreakdown(audit);
+
+      assert.equal(breakdown.groups[0].criteriaCount, 2);
+      assert.equal(breakdown.groups[0].checkedCount, 2);
+      assert.equal(breakdown.groups[0].triggeredCritical, true);
+      assert.equal(breakdown.groups[0].ccpCount, 1);
+      assert.equal(breakdown.groups[0].deductions[0].deductedScore, 4);
+      assert.equal(breakdown.groups[0].deductions[1].effect, "critical_group_zero");
+      assert.equal(breakdown.groups[1].criteriaCount, 1);
+      assert.equal(breakdown.groups[1].deductions[0].repeatLabel, "third");
+      assert.equal(breakdown.groups[1].deductions[0].multiplier, 3);
+      assert.equal(breakdown.groups[1].deductions[0].deductedScore, 9);
+      assert.equal(breakdown.risk.triggered, true);
+      assert.equal(breakdown.risk.count, 1);
+      assert.equal(breakdown.totals.finalScore, 0);
+    },
+  },
+  {
+    name: "route audit detail tra scoreBreakdown cho FE",
+    run: async () => {
+      setPrismaModel("audit", {
+        findUnique: async () => ({
+          id: "audit-1",
+          storeId: "store-1",
+          auditorId: "qc-1",
+          finalScore: 96,
+          grade: "excellent",
+          isRiskTriggered: false,
+          submittedAt: new Date("2026-05-19"),
+          editedAt: null,
+          editNote: null,
+          store: { id: "store-1", code: "ST001", name: "Store 1" },
+          form: {
+            id: "form-1",
+            name: "Checklist",
+            version: "v1",
+            status: "published",
+            sections: [
+              {
+                id: "section-a",
+                weight: 100,
+                group: { id: "group-a", code: "A", name: "An toan", weight: 100 },
+                items: [
+                  {
+                    id: "item-a1",
+                    criteria: {
+                      id: "criteria-a1",
+                      code: "A1",
+                      content: "Loi thuong",
+                      flag: "none",
+                      groupId: "group-a",
+                      deductionPerError: 2,
+                      maxDeduction: 10,
+                      group: { id: "group-a", code: "A", name: "An toan" },
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          groupScores: [
+            {
+              id: "gs-1",
+              groupId: "group-a",
+              groupCode: "A",
+              weight: 100,
+              maxScore: 100,
+              reachedScore: 96,
+              percentage: 96,
+              triggeredCritical: false,
+            },
+          ],
+          violations: [
+            {
+              id: "violation-a1",
+              numErrors: 2,
+              repeatCount: 0,
+              isCriticalTriggered: false,
+              isRiskTriggered: false,
+              note: "normal",
+              evidences: [],
+              criteria: {
+                id: "criteria-a1",
+                code: "A1",
+                content: "Loi thuong",
+                flag: "none",
+                groupId: "group-a",
+                deductionPerError: 2,
+                maxDeduction: 10,
+                group: { id: "group-a", code: "A", name: "An toan" },
+              },
+            },
+          ],
+          actionPlan: null,
+          correctionRequests: [],
+        }),
+      });
+      setPrismaModel("user", {
+        findUnique: async () => ({
+          id: "qc-1",
+          fullName: "QC One",
+          email: "qc@example.com",
+        }),
+      });
+
+      const route = await import("../src/app/api/audits/[id]/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+        }),
+        { params: { id: "audit-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.checklist.sections, undefined);
+      assert.equal(body.data.scoreBreakdown.groups[0].groupCode, "A");
+      assert.equal(body.data.scoreBreakdown.groups[0].deductions[0].deductedScore, 4);
     },
   },
   {
@@ -1769,6 +2116,21 @@ const tests: TestCase[] = [
           audit: null,
         }),
       });
+      setPrismaModel("criteria", {
+        findMany: async () => [
+          {
+            id: "risk-1",
+            code: "RISK-01",
+            content: "Risk global",
+            groupId: null,
+            deductionPerError: 0,
+            maxDeduction: 0,
+            flag: "risk",
+            isActive: true,
+            group: null,
+          },
+        ],
+      });
 
       const route = await import("../src/app/api/audits/assignments/[assignmentId]/route");
       const result = await route.GET(
@@ -1782,6 +2144,7 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 200);
       assert.equal(body.data.assignment.store.name, "Store 1");
+      assert.equal(body.data.riskCriteria[0].code, "RISK-01");
       assert.equal("historiesByCriteriaId" in body.data, false);
     },
   },
@@ -2041,9 +2404,8 @@ const tests: TestCase[] = [
     },
   },
   {
-    name: "route audit submit tinh repeat va tao action plan draft",
+    name: "route audit submit tinh repeat va khong tu tao action plan",
     run: async () => {
-      let actionPlanCreated = false;
       setPrismaModel("auditAssignment", {
         findUnique: async () => ({
           id: "assignment-1",
@@ -2125,12 +2487,6 @@ const tests: TestCase[] = [
             updateMany: async () => ({ count: 1 }),
             update: async () => ({ id: "assignment-1" }),
           },
-          actionPlan: {
-            upsert: async () => {
-              actionPlanCreated = true;
-              return { id: "ap-1" };
-            },
-          },
         })
       );
 
@@ -2155,7 +2511,6 @@ const tests: TestCase[] = [
       assert.equal(result.status, 200);
       assert.equal(body.data.repeatInfo[0].repeatCount, 3);
       assert.equal(body.data.repeatInfo[0].repeatLabel, "auto_ccp");
-      assert.equal(actionPlanCreated, true);
     },
   },
   {
@@ -2240,6 +2595,118 @@ const tests: TestCase[] = [
         body.error.message,
         "Audit assignment changed while the request was in progress"
       );
+    },
+  },
+  {
+    name: "route action plan submit bat anh voi loi critical risk",
+    run: async () => {
+      setPrismaModel("roleAssignment", {
+        findMany: async () => [{ storeId: "store-1" }],
+      });
+      setPrismaModel("store", {
+        findMany: async () => [],
+      });
+      setPrismaModel("actionPlan", {
+        findUnique: async () => ({
+          id: "ap-1",
+          storeId: "store-1",
+          status: "draft",
+          items: [
+            {
+              id: "item-1",
+              rootCause: "Nguyen nhan",
+              remediation: "Da sua",
+              fixedAt: new Date("2026-05-19"),
+              assigneeName: "Nhan su cua hang",
+              evidences: [],
+              violation: {
+                isCriticalTriggered: false,
+                isRiskTriggered: false,
+                criteria: { flag: "critical" },
+              },
+            },
+          ],
+        }),
+      });
+
+      const route = await import("../src/app/api/action-plans/[id]/submit/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          userId: "sm-1",
+          roles: ["store_manager"],
+        }),
+        { params: { id: "ap-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 400);
+      assert.equal(
+        body.error.message,
+        "Critical/risk action plan items require evidence images"
+      );
+    },
+  },
+  {
+    name: "route action plan submit thanh cong khi du thong tin bat buoc",
+    run: async () => {
+      let updatedStatus = "";
+      let notified = false;
+      setPrismaModel("roleAssignment", {
+        findMany: async () => [{ storeId: "store-1" }],
+      });
+      setPrismaModel("store", {
+        findMany: async () => [],
+      });
+      setPrismaModel("user", {
+        findMany: async () => [{ id: "qam-1" }],
+      });
+      setPrismaModel("notification", {
+        createMany: async () => {
+          notified = true;
+          return { count: 1 };
+        },
+      });
+      setPrismaModel("actionPlan", {
+        findUnique: async () => ({
+          id: "ap-1",
+          storeId: "store-1",
+          status: "draft",
+          items: [
+            {
+              id: "item-1",
+              rootCause: "Nguyen nhan",
+              remediation: "Da sua",
+              fixedAt: new Date("2026-05-19"),
+              assigneeName: "Nhan su cua hang",
+              evidences: [{ id: "img-1" }],
+              violation: {
+                isCriticalTriggered: true,
+                isRiskTriggered: false,
+                criteria: { flag: "none" },
+              },
+            },
+          ],
+        }),
+        update: async (args: any) => {
+          updatedStatus = args.data.status;
+          return { id: "ap-1", status: args.data.status };
+        },
+      });
+
+      const route = await import("../src/app/api/action-plans/[id]/submit/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          userId: "sm-1",
+          roles: ["store_manager"],
+        }),
+        { params: { id: "ap-1" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(body.data.status, "submitted");
+      assert.equal(updatedStatus, "submitted");
+      assert.equal(notified, true);
     },
   },
   {

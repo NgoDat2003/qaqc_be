@@ -61,7 +61,7 @@ Ly do tach nhu tren:
 | API | Muc dich | FE can luu y |
 |---|---|---|
 | `GET /api/audit-plans/my-assignments` | Lay viec cua QC hien tai | Chi hien bai da publish/open |
-| `GET /api/audits/assignments/:assignmentId` | Mo/resume bai audit | Khong kem history bundle |
+| `GET /api/audits/assignments/:assignmentId` | Mo/resume bai audit | Khong kem history bundle; co `riskCriteria` global |
 | `GET /api/audits/assignments/:assignmentId/history` | Lay full history cua checklist trong 1 request | Nen goi ngam sau khi man chinh render |
 | `POST /api/upload/images` | Upload anh bang chung | Chi nhan JPEG/PNG/WEBP, toi da `5MB` |
 | `PATCH /api/audits/draft` | Luu nhap | FE gui full danh sach violation hien tai |
@@ -82,6 +82,13 @@ type AuditWriteBody = {
   }>
 }
 ```
+
+`criteriaId` duoc phep la:
+
+- criteria nam trong `checklist.sections[].items[]`;
+- hoac criteria trong `riskCriteria[]`.
+
+`riskCriteria[]` la danh sach loi RISK global, khong nam trong group/section. FE nen render thanh vung rieng, khong hien trong bang group C/H/P/E.
 
 ### Response submit
 

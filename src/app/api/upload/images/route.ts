@@ -5,7 +5,7 @@ import path from "path";
 import { prisma } from "@/lib/prisma";
 import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
-import { QC_ROLES } from "@/lib/audit";
+const IMAGE_UPLOAD_ROLES = ["qc_auditor", "store_manager", "qa_manager"];
 
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -47,7 +47,7 @@ function hasValidImageSignature(buffer: Buffer, mimeType: string) {
 }
 
 export async function POST(request: NextRequest) {
-  const forbidden = requireRole(request, [...QC_ROLES]);
+  const forbidden = requireRole(request, IMAGE_UPLOAD_ROLES);
   if (forbidden) return forbidden;
 
   try {

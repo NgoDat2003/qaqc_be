@@ -82,6 +82,24 @@ export const auditAssignmentSessionSelect = {
 
 export type AuditAssignmentSession = any;
 
+export const globalRiskCriteriaSelect = {
+  id: true,
+  code: true,
+  content: true,
+  groupId: true,
+  deductionPerError: true,
+  maxDeduction: true,
+  flag: true,
+  isActive: true,
+  group: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+    },
+  },
+} as const;
+
 export const auditAssignmentHistorySelect = {
   id: true,
   auditorId: true,
@@ -154,6 +172,26 @@ export function getChecklistCriteria(assignment: AuditAssignmentSession) {
   );
 }
 
+export function getGlobalRiskCriteriaItems(riskCriteria: any[] = []) {
+  return riskCriteria.map((criterion) => ({
+    criteriaId: criterion.id,
+    criterion,
+    groupId: null,
+    groupCode: "RISK",
+    weight: 0,
+  }));
+}
+
+export function getAuditCriteria(
+  assignment: AuditAssignmentSession,
+  riskCriteria: any[] = []
+) {
+  return [
+    ...getChecklistCriteria(assignment),
+    ...getGlobalRiskCriteriaItems(riskCriteria),
+  ];
+}
+
 export function getChecklistCriteriaIds(assignment: any) {
   return assignment.plan.form.sections.flatMap((section: any) =>
     section.items.map((item: any) => item.criteria.id)
@@ -202,7 +240,10 @@ export function getAuditableAssignmentError(
   return null;
 }
 
-export function mapAuditSession(assignment: AuditAssignmentSession) {
+export function mapAuditSession(
+  assignment: AuditAssignmentSession,
+  riskCriteria: any[] = []
+) {
   return {
     assignment: {
       id: assignment.id,
@@ -218,6 +259,7 @@ export function mapAuditSession(assignment: AuditAssignmentSession) {
       },
     },
     checklist: assignment.plan.form,
+    riskCriteria,
     audit: assignment.audit
       ? {
           id: assignment.audit.id,

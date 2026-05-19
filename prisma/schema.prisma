@@ -53,8 +53,9 @@ model Store {
   audits      Audit[]
   actionPlans ActionPlan[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  AuditCorrectionRequest AuditCorrectionRequest[]
 
   @@index([brandId])
   @@index([amId])
@@ -75,12 +76,15 @@ model User {
   password String
   isActive Boolean @default(true)
 
-  roleAssignments   RoleAssignment[]
-  storesAsAM        Store[]           @relation("StoreAM")
-  storesAsManager   Store[]           @relation("StoreManager")
-  auditAssignments  AuditAssignment[] @relation("AssignmentAuditor")
-  closedActionPlans ActionPlan[]      @relation("ActionPlanCloser")
-  notifications     Notification[]
+  roleAssignments           RoleAssignment[]
+  storesAsAM                Store[]                  @relation("StoreAM")
+  storesAsManager           Store[]                  @relation("StoreManager")
+  auditAssignments          AuditAssignment[]        @relation("AssignmentAuditor")
+  closedActionPlans         ActionPlan[]             @relation("ActionPlanCloser")
+  reviewedActionPlans       ActionPlan[]             @relation("ActionPlanReviewer")
+  requestedAuditCorrections AuditCorrectionRequest[] @relation("CorrectionRequester")
+  reviewedAuditCorrections  AuditCorrectionRequest[] @relation("CorrectionReviewer")
+  notifications             Notification[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -286,10 +290,11 @@ model Audit {
   grade           String        @default("excellent")
   isRiskTriggered Boolean       @default(false)
 
-  assignment  AuditAssignment?
-  groupScores GroupScore[]
-  violations  Violation[]
-  actionPlan  ActionPlan?
+  assignment         AuditAssignment?
+  groupScores        GroupScore[]
+  violations         Violation[]
+  actionPlan         ActionPlan?
+  correctionRequests AuditCorrectionRequest[]
 
   submittedAt DateTime?
   editedAt    DateTime?
@@ -337,7 +342,8 @@ model Violation {
 
   evidences Evidence[]
 
-  createdAt DateTime @default(now())
+  createdAt      DateTime         @default(now())
+  ActionPlanItem ActionPlanItem[]
 
   @@index([auditId])
   @@index([criteriaId])
@@ -350,15 +356,18 @@ model Evidence {
   fileName String?
   mimeType String?
 
-  violationId  String?
-  violation    Violation?  @relation(fields: [violationId], references: [id], onDelete: SetNull)
-  actionPlanId String?
-  actionPlan   ActionPlan? @relation(fields: [actionPlanId], references: [id], onDelete: SetNull)
+  violationId      String?
+  violation        Violation?      @relation(fields: [violationId], references: [id], onDelete: SetNull)
+  actionPlanId     String?
+  actionPlan       ActionPlan?     @relation(fields: [actionPlanId], references: [id], onDelete: SetNull)
+  actionPlanItemId String?
+  actionPlanItem   ActionPlanItem? @relation(fields: [actionPlanItemId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
   @@index([violationId])
   @@index([actionPlanId])
+  @@index([actionPlanItemId])
   @@map("evidences")
 }
 
@@ -367,21 +376,26 @@ model Evidence {
 // =============================================================================
 
 model ActionPlan {
-  id          String     @id @default(cuid())
-  auditId     String     @unique
-  audit       Audit      @relation(fields: [auditId], references: [id])
+  id          String           @id @default(cuid())
+  auditId     String           @unique
+  audit       Audit            @relation(fields: [auditId], references: [id])
   storeId     String
-  store       Store      @relation(fields: [storeId], references: [id])
+  store       Store            @relation(fields: [storeId], references: [id])
   // "draft"|"submitted"|"rejected"|"closed"
-  status      String     @default("draft")
+  status      String           @default("draft")
   remediation String?
   deadline    DateTime?
   evidences   Evidence[]
+  items       ActionPlanItem[]
 
   // QAM who closed — only QAM can close (FR-AP)
-  closedById String?
-  closedBy   User?     @relation("ActionPlanCloser", fields: [closedById], references: [id])
-  closedAt   DateTime?
+  closedById   String?
+  closedBy     User?     @relation("ActionPlanCloser", fields: [closedById], references: [id])
+  closedAt     DateTime?
+  reviewedById String?
+  reviewedBy   User?     @relation("ActionPlanReviewer", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  reviewNote   String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -390,6 +404,55 @@ model ActionPlan {
   @@index([status])
   @@index([deadline])
   @@map("action_plans")
+}
+
+model ActionPlanItem {
+  id           String     @id @default(cuid())
+  actionPlanId String
+  actionPlan   ActionPlan @relation(fields: [actionPlanId], references: [id], onDelete: Cascade)
+  violationId  String
+  violation    Violation  @relation(fields: [violationId], references: [id])
+  rootCause    String?
+  remediation  String?
+  fixedAt      DateTime?
+  assigneeName String?
+  status       String     @default("open")
+  evidences    Evidence[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([actionPlanId, violationId])
+  @@index([actionPlanId])
+  @@index([violationId])
+  @@index([status])
+  @@map("action_plan_items")
+}
+
+model AuditCorrectionRequest {
+  id            String    @id @default(cuid())
+  auditId       String
+  audit         Audit     @relation(fields: [auditId], references: [id], onDelete: Cascade)
+  storeId       String
+  store         Store     @relation(fields: [storeId], references: [id])
+  requestedById String
+  requestedBy   User      @relation("CorrectionRequester", fields: [requestedById], references: [id])
+  reason        String
+  status        String    @default("pending")
+  reviewedById  String?
+  reviewedBy    User?     @relation("CorrectionReviewer", fields: [reviewedById], references: [id])
+  reviewedAt    DateTime?
+  reviewNote    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([auditId])
+  @@index([storeId])
+  @@index([requestedById])
+  @@index([reviewedById])
+  @@index([status])
+  @@map("audit_correction_requests")
 }
 
 // =============================================================================

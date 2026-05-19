@@ -9,8 +9,9 @@ import {
   AuditAssignmentConflictError,
   auditAssignmentSessionSelect,
   auditWriteSchema,
+  getAuditCriteria,
   getAuditableAssignmentError,
-  getChecklistCriteria,
+  globalRiskCriteriaSelect,
   mapAuditSession,
   QC_ROLES,
 } from "@/lib/audit";
@@ -50,8 +51,13 @@ export async function PATCH(request: NextRequest) {
       return response.error("Submitted audit cannot be changed by QC", 400);
     }
 
+    const riskCriteria = await prisma.criteria.findMany({
+      where: { flag: "risk", isActive: true },
+      select: globalRiskCriteriaSelect,
+      orderBy: { code: "asc" },
+    });
     const allowedCriteriaIds = new Set(
-      getChecklistCriteria(assignment).map((item: any) => item.criteriaId)
+      getAuditCriteria(assignment, riskCriteria).map((item: any) => item.criteriaId)
     );
     if (
       parsed.data.violations.some(
@@ -180,7 +186,7 @@ export async function PATCH(request: NextRequest) {
     });
 
     return response.success(
-      mapAuditSession(savedAssignment),
+      mapAuditSession(savedAssignment, riskCriteria),
       "Audit draft saved successfully"
     );
   } catch (error) {

@@ -4,6 +4,7 @@ import { response } from "@/lib/api-response";
 import { requireRole } from "@/lib/rbac";
 import {
   auditAssignmentSessionSelect,
+  globalRiskCriteriaSelect,
   mapAuditSession,
   QC_ROLES,
 } from "@/lib/audit";
@@ -32,7 +33,13 @@ export async function GET(
       return response.forbidden("Assignment does not belong to current auditor");
     }
 
-    return response.success(mapAuditSession(assignment));
+    const riskCriteria = await prisma.criteria.findMany({
+      where: { flag: "risk", isActive: true },
+      select: globalRiskCriteriaSelect,
+      orderBy: { code: "asc" },
+    });
+
+    return response.success(mapAuditSession(assignment, riskCriteria));
   } catch (error) {
     console.error("Get audit session error:", error);
     return response.error("Internal server error", 500);

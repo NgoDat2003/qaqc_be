@@ -13,6 +13,7 @@ export type ScoringGroup = {
   id: string;
   code: string;
   weight: number;
+  maxScore?: number;
 };
 
 export type ScoringViolation = {
@@ -55,6 +56,19 @@ function multiplierFor(label: RepeatLabel) {
   if (label === "second") return 2;
   if (label === "third") return 3;
   return 1;
+}
+
+function maxScoreForGroup(
+  group: ScoringGroup,
+  criteria: ScoringCriteria[]
+) {
+  if (group.maxScore !== undefined) return group.maxScore;
+
+  const total = criteria
+    .filter((item) => item.groupId === group.id && item.flag === "none")
+    .reduce((sum, item) => sum + item.maxDeduction, 0);
+
+  return total > 0 ? total : 100;
 }
 
 export function calculateAuditScore({
@@ -103,11 +117,12 @@ export function calculateAuditScore({
   }
 
   const groupScores = groups.map((group) => {
-    const maxScore = 100;
+    const maxScore = maxScoreForGroup(group, criteria);
     const triggeredCritical = criticalGroups.has(group.id);
     const reachedScore = triggeredCritical
       ? 0
       : Math.max(0, maxScore - (deductionsByGroup.get(group.id) ?? 0));
+    const percentage = maxScore > 0 ? (reachedScore / maxScore) * 100 : 0;
 
     return {
       groupId: group.id,
@@ -115,13 +130,13 @@ export function calculateAuditScore({
       weight: group.weight,
       maxScore,
       reachedScore: roundScore(reachedScore),
-      percentage: roundScore((reachedScore / maxScore) * 100),
+      percentage: roundScore(percentage),
       triggeredCritical,
     };
   });
 
   const weightedScore = groupScores.reduce(
-    (total, group) => total + group.reachedScore * (group.weight / 100),
+    (total, group) => total + group.percentage * (group.weight / 100),
     0
   );
   const finalScore = isRiskTriggered ? 0 : roundScore(weightedScore);
