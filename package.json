@@ -11,6 +11,8 @@
     "seed:analytics": "ts-node -O \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed-analytics.ts append",
     "seed:analytics:reset": "ts-node -O \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed-analytics.ts reset-qaqc-analytics",
     "seed:analytics:normalize": "ts-node -O \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed-analytics.ts normalize-master",
+    "e2e:cleanup:dry": "node scripts/cleanup-e2e-portfolio.mjs --dry-run",
+    "e2e:cleanup": "node scripts/cleanup-e2e-portfolio.mjs",
     "benchmark:analytics": "node scripts/benchmark-analytics.mjs"
   },
   "prisma": {
