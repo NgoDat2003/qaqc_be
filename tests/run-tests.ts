@@ -11,6 +11,7 @@ import {
   readAdminCache,
 } from "../src/lib/admin-cache";
 import { getRepeatState } from "../src/lib/audit";
+import { actionPlanDetailDto } from "../src/lib/audit-workflow";
 import { calculateAuditScore } from "../src/lib/scoring";
 import { buildAuditScoreBreakdown } from "../src/lib/audit-score-breakdown";
 
@@ -717,6 +718,7 @@ const tests: TestCase[] = [
           roles: ["qa_manager"],
           body: {
             code: "c-001",
+            name: "San nha",
             content: "San nha khong sach",
             groupId: "missing-group",
             deductionPerError: 1,
@@ -758,6 +760,7 @@ const tests: TestCase[] = [
           roles: ["qa_manager"],
           body: {
             code: "ccp-001",
+            name: "CCP nhom",
             content: "Loi CCP lam mat diem nhom",
             groupId: "group-c",
             flag: "critical",
@@ -767,6 +770,7 @@ const tests: TestCase[] = [
       const body = await responseJson(result);
 
       assert.equal(result.status, 201);
+      assert.equal(body.data.name, "CCP nhom");
       assert.equal(createdData.deductionPerError, 0);
       assert.equal(createdData.maxDeduction, 0);
       assert.equal(body.data.flag, "critical");
@@ -803,6 +807,7 @@ const tests: TestCase[] = [
           roles: ["qa_manager"],
           body: {
             code: "risk-001",
+            name: "Risk toan bai",
             content: "Loi risk lam diem toan bai ve 0",
             flag: "risk",
             groupId: "",
@@ -818,6 +823,7 @@ const tests: TestCase[] = [
       assert.equal(createdData.groupId, null);
       assert.equal(createdData.deductionPerError, 0);
       assert.equal(createdData.maxDeduction, 0);
+      assert.equal(body.data.name, "Risk toan bai");
       assert.equal(body.data.group, null);
     },
   },
@@ -852,6 +858,7 @@ const tests: TestCase[] = [
           roles: ["qa_manager"],
           body: {
             code: "risk-002",
+            name: "Risk global",
             content: "Loi risk global khong can nhom",
             flag: "risk",
             groupId: null,
@@ -879,6 +886,7 @@ const tests: TestCase[] = [
           roles: ["qa_manager"],
           body: {
             code: "normal-001",
+            name: "Loi thuong",
             content: "Loi thuong can diem tru",
             groupId: "group-c",
             flag: "none",
@@ -2514,6 +2522,130 @@ const tests: TestCase[] = [
     },
   },
   {
+    name: "route audit submit chon risk thi diem ve 0 va grade alarm",
+    run: async () => {
+      let auditUpdateData: any = null;
+      let violationCreateData: any = null;
+
+      setPrismaModel("auditAssignment", {
+        findUnique: async () => ({
+          id: "assignment-risk",
+          status: "in_progress",
+          auditId: "audit-risk",
+          auditorId: "qc-1",
+          storeId: "store-1",
+          store: { id: "store-1", code: "MC-001", name: "Store 1" },
+          plan: {
+            id: "plan-1",
+            name: "Plan 1",
+            status: "open",
+            startDate: new Date("2026-05-01"),
+            endDate: new Date("2026-05-30"),
+            formId: "form-1",
+            form: {
+              id: "form-1",
+              name: "Checklist",
+              version: "v1",
+              status: "published",
+              sections: [
+                {
+                  group: { id: "group-c", code: "C" },
+                  weight: 100,
+                  items: [],
+                },
+              ],
+            },
+          },
+          audit: {
+            id: "audit-risk",
+            submittedAt: null,
+            violations: [],
+          },
+        }),
+      });
+      setPrismaModel("criteria", {
+        findMany: async () => [
+          {
+            id: "criteria-risk",
+            code: "RISK-01",
+            name: "Risk an toàn",
+            content: "Risk toàn bài",
+            groupId: null,
+            deductionPerError: 0,
+            maxDeduction: 0,
+            flag: "risk",
+            isActive: true,
+            group: null,
+          },
+        ],
+      });
+      setPrismaModel("violation", {
+        findMany: async () => [],
+      });
+      setPrismaModel("$transaction", async (callback: any) =>
+        callback({
+          violation: {
+            findMany: async () => [],
+            deleteMany: async () => ({ count: 0 }),
+            create: async (args: any) => {
+              violationCreateData = args.data;
+              return { id: "violation-risk" };
+            },
+          },
+          evidence: {
+            updateMany: async () => ({ count: 0 }),
+          },
+          groupScore: {
+            deleteMany: async () => ({ count: 0 }),
+            createMany: async () => ({ count: 1 }),
+          },
+          audit: {
+            update: async (args: any) => {
+              auditUpdateData = args.data;
+              return {
+                id: "audit-risk",
+                finalScore: args.data.finalScore,
+                grade: args.data.grade,
+                isRiskTriggered: args.data.isRiskTriggered,
+              };
+            },
+          },
+          auditAssignment: {
+            updateMany: async () => ({ count: 1 }),
+            update: async () => ({ id: "assignment-risk" }),
+          },
+        })
+      );
+
+      const route = await import("../src/app/api/audits/submit/route");
+      const result = await route.POST(
+        fakeRouteRequest({
+          userId: "qc-1",
+          roles: ["qc_auditor"],
+          body: {
+            assignmentId: "assignment-risk",
+            violations: [
+              {
+                criteriaId: "criteria-risk",
+                numErrors: 1,
+              },
+            ],
+          },
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 200);
+      assert.equal(auditUpdateData.finalScore, 0);
+      assert.equal(auditUpdateData.grade, "alarm");
+      assert.equal(auditUpdateData.isRiskTriggered, true);
+      assert.equal(violationCreateData.isRiskTriggered, true);
+      assert.equal(body.data.finalScore, 0);
+      assert.equal(body.data.grade, "alarm");
+      assert.equal(body.data.isRiskTriggered, true);
+    },
+  },
+  {
     name: "route audit submit tra 409 neu assignment bi submit dong thoi",
     run: async () => {
       setPrismaModel("auditAssignment", {
@@ -2595,6 +2727,66 @@ const tests: TestCase[] = [
         body.error.message,
         "Audit assignment changed while the request was in progress"
       );
+    },
+  },
+  {
+    name: "action plan detail dto tra issueCause tu mo ta loi QC",
+    run: () => {
+      const dto = actionPlanDetailDto(
+        {
+          id: "ap-1",
+          status: "draft",
+          reviewNote: null,
+          reviewedAt: null,
+          closedAt: null,
+          createdAt: new Date("2026-05-20"),
+          updatedAt: new Date("2026-05-20"),
+          store: { id: "store-1", code: "ST001", name: "Store 1" },
+          audit: {
+            id: "audit-1",
+            finalScore: 90,
+            grade: "good",
+            submittedAt: new Date("2026-05-20"),
+            auditorId: "qc-1",
+            form: { id: "form-1", name: "Checklist", version: "1.0.0", status: "published" },
+          },
+          closedBy: null,
+          reviewedBy: null,
+          items: [
+            {
+              id: "item-1",
+              rootCause: null,
+              remediation: null,
+              fixedAt: null,
+              assigneeName: null,
+              status: "open",
+              evidences: [],
+              violation: {
+                id: "violation-1",
+                criteria: {
+                  id: "criteria-1",
+                  code: "C1",
+                  name: "Khu vực thu ngân",
+                  content: "Quầy ra món/ nhận nước",
+                  flag: "none",
+                  group: { id: "group-c", code: "C", name: "Cleanliness" },
+                },
+                numErrors: 1,
+                repeatCount: 0,
+                isCriticalTriggered: false,
+                isRiskTriggered: false,
+                note: "QC ghi nhận khu vực thu ngân chưa sạch",
+                evidences: [],
+              },
+            },
+          ],
+        },
+        { id: "qc-1", fullName: "QC Demo", email: "qc@example.test" }
+      );
+
+      assert.equal(dto.items[0].issueCause, "QC ghi nhận khu vực thu ngân chưa sạch");
+      assert.equal(dto.items[0].violation.note, "QC ghi nhận khu vực thu ngân chưa sạch");
+      assert.equal(dto.items[0].rootCause, null);
     },
   },
   {
@@ -2707,6 +2899,457 @@ const tests: TestCase[] = [
       assert.equal(body.data.status, "submitted");
       assert.equal(updatedStatus, "submitted");
       assert.equal(notified, true);
+    },
+  },
+  {
+    name: "dashboard filters mac dinh dung thang hien tai khi khong truyen ngay",
+    run: async () => {
+      const { parseDashboardFilters } = await import("../src/lib/dashboard");
+      const filters = parseDashboardFilters(new URLSearchParams(
+        "assignmentStatus=completed&actionPlanStatus=submitted&grade=alarm&riskOnly=true&overdueOnly=1"
+      ));
+
+      assert.equal(filters.from.getUTCDate(), 1);
+      assert.equal(filters.to.getUTCHours(), 23);
+      assert.equal(filters.to.getUTCMinutes(), 59);
+      assert.equal(filters.assignmentStatus, "completed");
+      assert.equal(filters.actionPlanStatus, "submitted");
+      assert.equal(filters.grade, "alarm");
+      assert.equal(filters.riskOnly, true);
+      assert.equal(filters.overdueOnly, true);
+    },
+  },
+  {
+    name: "route dashboard chan scope khong ton tai",
+    run: async () => {
+      const route = await import("../src/app/api/dashboard/[scope]/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "admin-1",
+          roles: ["company_admin"],
+        }),
+        { params: { scope: "unknown" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 404);
+      assert.equal(body.success, false);
+    },
+  },
+  {
+    name: "route dashboard admin chi cho company_admin",
+    run: async () => {
+      const route = await import("../src/app/api/dashboard/[scope]/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          userId: "qam-1",
+          roles: ["qa_manager"],
+        }),
+        { params: { scope: "admin" } }
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 403);
+      assert.equal(body.success, false);
+    },
+  },
+  {
+    name: "route dashboard filters chan scope khac role",
+    run: async () => {
+      const route = await import("../src/app/api/dashboard/filters/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          url: "http://localhost/api/dashboard/filters?scope=admin",
+          userId: "qam-1",
+          roles: ["qa_manager"],
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 403);
+      assert.equal(body.success, false);
+    },
+  },
+  {
+    name: "dashboard percentage khong chia loi khi tong bang 0",
+    run: async () => {
+      const { percentage } = await import("../src/lib/dashboard");
+
+      assert.equal(percentage(5, 0), 0);
+      assert.equal(percentage(1, 4), 25);
+    },
+  },
+  {
+    name: "dashboard SM action plan items tra deadline overdue va status cha",
+    run: async () => {
+      const oldDeadline = new Date("2026-01-01T00:00:00.000Z");
+      const createdAt = new Date("2025-12-20T00:00:00.000Z");
+      setPrismaModel("roleAssignment", {
+        findMany: async () => [{ storeId: "store-1" }],
+      });
+      setPrismaModel("store", {
+        findMany: async () => [{ id: "store-1" }],
+      });
+      setPrismaModel("audit", {
+        findMany: async (args: any) => {
+          if (!args.where.submittedAt?.gte) {
+            return [
+              { finalScore: 82, submittedAt: new Date("2026-05-10T00:00:00.000Z") },
+              { finalScore: 74, submittedAt: new Date("2026-04-10T00:00:00.000Z") },
+              { finalScore: 91, submittedAt: new Date("2026-03-10T00:00:00.000Z") },
+              { finalScore: 65, submittedAt: new Date("2026-02-10T00:00:00.000Z") },
+              { finalScore: 88, submittedAt: new Date("2026-01-10T00:00:00.000Z") },
+              { finalScore: 55, submittedAt: new Date("2025-12-10T00:00:00.000Z") },
+            ];
+          }
+          return [
+            {
+              id: "audit-1",
+              finalScore: 82,
+              grade: "good",
+              isRiskTriggered: false,
+              submittedAt: new Date("2026-05-10T00:00:00.000Z"),
+              store: {
+                id: "store-1",
+                code: "ST001",
+                name: "Store 1",
+                province: "TP HCM",
+                brand: { id: "brand-1", code: "BR", name: "Brand" },
+                am: { id: "am-1", fullName: "AM One", email: "am@example.com" },
+              },
+              violations: [],
+              form: { id: "form-1", name: "Checklist", version: "1.0.0" },
+            },
+          ];
+        },
+      });
+      setPrismaModel("auditAssignment", {
+        groupBy: async () => [],
+      });
+      setPrismaModel("auditPlan", {
+        findMany: async () => [],
+      });
+      setPrismaModel("user", {
+        findMany: async () => [],
+      });
+      setPrismaModel("violation", {
+        groupBy: async () => [{ criteriaId: "criteria-1", _count: { _all: 1 }, _sum: { numErrors: 2 } }],
+        count: async () => 0,
+        findMany: async () => [],
+      });
+      setPrismaModel("criteria", {
+        findMany: async () => [
+          {
+            id: "criteria-1",
+            code: "C1",
+            name: "Khu vực thu ngân",
+            flag: "none",
+            group: { id: "group-1", code: "C", name: "Vệ sinh" },
+          },
+        ],
+      });
+      setPrismaModel("actionPlan", {
+        groupBy: async () => [{ status: "draft", _count: { _all: 1 } }],
+        count: async () => 1,
+        findMany: async () => [],
+      });
+      setPrismaModel("actionPlanItem", {
+        count: async () => 1,
+        findMany: async () => [
+          {
+            id: "ap-item-1",
+            status: "open",
+            rootCause: null,
+            remediation: null,
+            fixedAt: null,
+            assigneeName: null,
+            violation: {
+              note: "Khu vực chưa sạch",
+              numErrors: 1,
+              repeatCount: 0,
+              isCriticalTriggered: false,
+              isRiskTriggered: false,
+              criteria: {
+                id: "criteria-1",
+                code: "C1",
+                name: "Khu vực thu ngân",
+                flag: "none",
+                group: { id: "group-1", code: "C", name: "Vệ sinh" },
+              },
+            },
+            actionPlan: {
+              id: "ap-1",
+              status: "draft",
+              deadline: oldDeadline,
+              createdAt,
+            },
+            evidences: [{ id: "img-1", url: "/uploads/evidence/demo.svg" }],
+          },
+        ],
+      });
+      setPrismaModel("evidence", {
+        findMany: async () => [
+          {
+            id: "img-1",
+            url: "/uploads/evidence/demo.svg",
+            fileName: "demo.svg",
+            mimeType: "image/svg+xml",
+            actionPlanId: "ap-1",
+            actionPlanItemId: "ap-item-1",
+            createdAt: new Date("2026-05-12T00:00:00.000Z"),
+            actionPlanItem: {
+              violation: {
+                criteria: { name: "Khu vực thu ngân" },
+              },
+            },
+          },
+        ],
+      });
+
+      const { getSmDashboard } = await import("../src/lib/dashboard");
+      const data = await getSmDashboard(
+        "sm-1",
+        ["store_manager"],
+        new URLSearchParams("from=2026-05-01&to=2026-05-31")
+      );
+      const item = data.tables.actionPlanItemsToUpdate[0] as any;
+      const charts = data.charts as any;
+      const tables = data.tables as any;
+
+      assert.equal(item.actionPlanStatus, "draft");
+      assert.equal(item.deadline, oldDeadline);
+      assert.equal(item.overdueDays > 0, true);
+      assert.equal(item.issueCause, "Khu vực chưa sạch");
+      assert.equal(item.imageCount, 1);
+      assert.equal(charts.actionPlanStatus.submitted, 0);
+      assert.equal(charts.errorsByGroup[0].count, 2);
+      assert.deepEqual(
+        charts.scoreTrend.map((item: any) => item.label),
+        ["T01", "T02", "T03", "T04", "T05"]
+      );
+      assert.equal(charts.scoreTrend[4].date, "2026-05-01T00:00:00.000Z");
+      assert.equal(tables.latestRemediationImages[0].actionPlanId, "ap-1");
+      assert.equal(tables.latestRemediationImages[0].itemId, "ap-item-1");
+      assert.equal(tables.latestRemediationImages[0].criteriaName, "Khu vực thu ngân");
+    },
+  },
+  {
+    name: "dashboard AM tra trend 5 thang moi nhat va AP theo store day du",
+    run: async () => {
+      const oldDeadline = new Date("2026-01-01T00:00:00.000Z");
+      const futureDeadline = new Date("2026-06-01T00:00:00.000Z");
+      const closedDeadline = new Date("2026-05-20T00:00:00.000Z");
+      const createdAt = new Date("2025-12-20T00:00:00.000Z");
+      setPrismaModel("roleAssignment", {
+        findMany: async () => [{ storeId: "store-1" }],
+      });
+      setPrismaModel("store", {
+        count: async () => 1,
+        findMany: async () => [{ id: "store-1" }],
+      });
+      setPrismaModel("audit", {
+        findMany: async (args: any) => {
+          if (!args.where.submittedAt?.gte && args.select?.submittedAt) {
+            return [
+              { finalScore: 82, submittedAt: new Date("2026-05-10T00:00:00.000Z") },
+              { finalScore: 74, submittedAt: new Date("2026-04-10T00:00:00.000Z") },
+              { finalScore: 91, submittedAt: new Date("2026-03-10T00:00:00.000Z") },
+              { finalScore: 65, submittedAt: new Date("2026-02-10T00:00:00.000Z") },
+              { finalScore: 88, submittedAt: new Date("2026-01-10T00:00:00.000Z") },
+              { finalScore: 55, submittedAt: new Date("2025-12-10T00:00:00.000Z") },
+            ];
+          }
+          if (args.select?.store) {
+            return [
+              {
+                id: "audit-1",
+                finalScore: 82,
+                grade: "good",
+                isRiskTriggered: false,
+                submittedAt: new Date("2026-05-10T00:00:00.000Z"),
+                store: {
+                  id: "store-1",
+                  code: "ST001",
+                  name: "Store 1",
+                  province: "TP HCM",
+                  brand: { id: "brand-1", code: "BR", name: "Brand" },
+                  am: { id: "am-1", fullName: "AM One", email: "am@example.com" },
+                },
+                violations: [],
+              },
+            ];
+          }
+          return [];
+        },
+      });
+      setPrismaModel("auditAssignment", {
+        groupBy: async () => [],
+      });
+      setPrismaModel("auditPlan", {
+        findMany: async () => [],
+      });
+      setPrismaModel("user", {
+        findMany: async () => [],
+      });
+      setPrismaModel("violation", {
+        groupBy: async () => [{ criteriaId: "criteria-1", _count: { _all: 1 }, _sum: { numErrors: 2 } }],
+        count: async () => 0,
+        findMany: async () => [],
+      });
+      setPrismaModel("criteria", {
+        findMany: async () => [
+          {
+            id: "criteria-1",
+            code: "C1",
+            name: "Khu vực thu ngân",
+            flag: "none",
+            group: { id: "group-1", code: "C", name: "Vệ sinh" },
+          },
+        ],
+      });
+      setPrismaModel("actionPlan", {
+        groupBy: async () => [
+          { status: "draft", _count: { _all: 1 } },
+          { status: "submitted", _count: { _all: 1 } },
+          { status: "closed", _count: { _all: 1 } },
+        ],
+        count: async () => 3,
+        findMany: async (args: any) => {
+          if (args.select?._count) {
+            return [
+              {
+                id: "ap-1",
+                status: "draft",
+                deadline: oldDeadline,
+                createdAt,
+                store: { id: "store-1", code: "ST001", name: "Store 1" },
+                audit: { id: "audit-1", finalScore: 82, grade: "good", submittedAt: new Date("2026-05-10") },
+                items: [{ assigneeName: "Nhan su cua hang" }],
+                _count: { items: 1 },
+              },
+            ];
+          }
+          return [
+            {
+              id: "ap-1",
+              status: "draft",
+              deadline: oldDeadline,
+              createdAt,
+              store: { id: "store-1", code: "ST001", name: "Store 1" },
+            },
+            {
+              id: "ap-2",
+              status: "submitted",
+              deadline: futureDeadline,
+              createdAt: new Date("2026-05-01T00:00:00.000Z"),
+              store: { id: "store-1", code: "ST001", name: "Store 1" },
+            },
+            {
+              id: "ap-3",
+              status: "closed",
+              deadline: closedDeadline,
+              createdAt: new Date("2026-05-02T00:00:00.000Z"),
+              store: { id: "store-1", code: "ST001", name: "Store 1" },
+            },
+          ];
+        },
+      });
+      setPrismaModel("actionPlanItem", {
+        count: async () => 0,
+      });
+
+      const { getAmDashboard } = await import("../src/lib/dashboard");
+      const data = await getAmDashboard(
+        "am-1",
+        ["am"],
+        new URLSearchParams("from=2026-05-01&to=2026-05-31")
+      );
+      const charts = data.charts as any;
+      const tables = data.tables as any;
+      const table = (tables.actionPlansByStore as any[])[0];
+
+      assert.deepEqual(
+        charts.scoreTrend.map((item: any) => item.label),
+        ["T01", "T02", "T03", "T04", "T05"]
+      );
+      assert.equal(charts.scoreTrend[4].date, "2026-05-01T00:00:00.000Z");
+      assert.equal(charts.actionPlanStatus.rejected, 0);
+      assert.equal(charts.errorsByGroup[0].count, charts.errorsByGroup[0].errorCount);
+      assert.equal((tables.topStores as any[])[0].latestAuditDate.toISOString(), "2026-05-10T00:00:00.000Z");
+      assert.equal((tables.topStores as any[])[0].latestScore, 82);
+      assert.equal((tables.topStores as any[])[0].grade, "good");
+      assert.equal((tables.bottomStores as any[])[0].latestAuditDate.toISOString(), "2026-05-10T00:00:00.000Z");
+      assert.equal((tables.bottomStores as any[])[0].latestScore, 82);
+      assert.equal((tables.bottomStores as any[])[0].grade, "good");
+      assert.equal(table.totalCount, 3);
+      assert.equal(table.openCount, 2);
+      assert.equal(table.closedCount, 1);
+      assert.equal(table.overdueCount, 1);
+      assert.equal(table.maxOverdueDays > 0, true);
+      assert.equal(table.latestDueDate, futureDeadline);
+    },
+  },
+  {
+    name: "dashboard filters SM tra action plan status options",
+    run: async () => {
+      setPrismaModel("roleAssignment", {
+        findMany: async () => [{ storeId: "store-1" }],
+      });
+      setPrismaModel("brand", {
+        findMany: async () => [],
+      });
+      setPrismaModel("store", {
+        findMany: async () => [],
+      });
+      setPrismaModel("user", {
+        findMany: async () => [],
+      });
+      setPrismaModel("checklistForm", {
+        findMany: async () => [
+          { id: "form-1", name: "Checklist", version: "1.0.0", status: "published" },
+        ],
+      });
+      setPrismaModel("auditPlan", {
+        findMany: async () => [],
+      });
+
+      const { getDashboardFilters } = await import("../src/lib/dashboard");
+      const data = await getDashboardFilters(
+        "sm-1",
+        ["store_manager"],
+        new URLSearchParams("scope=sm")
+      );
+
+      assert.equal(data?.checklists[0].id, "form-1");
+      assert.deepEqual(
+        data?.actionPlanStatuses.map((item: any) => item.value),
+        ["draft", "submitted", "rejected", "closed"]
+      );
+      assert.deepEqual(
+        data?.assignmentStatuses.map((item: any) => item.value),
+        ["pending", "in_progress", "completed"]
+      );
+      assert.deepEqual(
+        data?.grades.map((item: any) => item.value),
+        ["excellent", "good", "pass", "fail", "alarm"]
+      );
+    },
+  },
+  {
+    name: "dashboard export chap nhan scope sm va enforce role sm",
+    run: async () => {
+      const route = await import("../src/app/api/dashboard/export/route");
+      const result = await route.GET(
+        fakeRouteRequest({
+          url: "http://localhost/api/dashboard/export?scope=sm",
+          userId: "qam-1",
+          roles: ["qa_manager"],
+        })
+      );
+      const body = await responseJson(result);
+
+      assert.equal(result.status, 403);
+      assert.equal(body.success, false);
     },
   },
   {

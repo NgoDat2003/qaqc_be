@@ -106,6 +106,7 @@ Query optional:
 type CriteriaItem = {
   id: string
   code: string
+  name: string
   content: string
   groupId: string | null
   group: { id: string; code: string; name: string } | null
@@ -123,6 +124,7 @@ type CriteriaItem = {
 ```ts
 type Body = {
   code: string
+  name: string
   content: string
   groupId?: string | null
   deductionPerError?: number
@@ -142,6 +144,7 @@ Rule:
 
 ```ts
 type Body = {
+  name?: string
   content?: string
   groupId?: string | null
   deductionPerError?: number

@@ -138,6 +138,7 @@ model Criteria {
   // null for global RISK criteria. Normal and CCP criteria must belong to a group.
   groupId           String?
   group             CriteriaGroup? @relation(fields: [groupId], references: [id])
+  name              String         @default("")
   content           String
   // Only used for normal criteria. CCP/RISK criteria are stored as 0 and handled by flag.
   deductionPerError Float          @default(1.0)

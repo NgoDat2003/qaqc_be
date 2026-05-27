@@ -2,8 +2,10 @@
 
 ## AI Workflow Boundary
 - Backend nay dung Codex lam workflow chinh: `AGENTS.md` + `.codex/`.
+- ClaudeKit/Codex skills dung ban global da migrate len v2.19; repo nay chi tham chieu global runtime ben ngoai project.
 - `/ck:` skills den tu Codex global/plugin runtime, khong copy skill packs vao repo.
-- Khong them `.claude/`, `.agents/`, hoac ClaudeKit source folder vao backend.
+- Khong them `.claude/`, `.agents/`, `skills/`, hoac ClaudeKit source folder vao backend.
+- Neu can update skills/agents, update o global ClaudeKit/Codex runtime, khong vendor vao project nay.
 - Frontend co the dung ClaudeKit rieng, nhung khong dung chung workflow folder voi backend.
 
 ## Stack

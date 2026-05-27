@@ -178,6 +178,7 @@ async function loadActionPlanDetail(id: string) {
                 select: {
                   id: true,
                   code: true,
+                  name: true,
                   content: true,
                   flag: true,
                   group: { select: { id: true, code: true, name: true } },

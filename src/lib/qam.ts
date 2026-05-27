@@ -15,6 +15,7 @@ export const criteriaGroupSelect = {
 export const criteriaSelect = {
   id: true,
   code: true,
+  name: true,
   content: true,
   groupId: true,
   deductionPerError: true,
@@ -194,6 +195,7 @@ export const criteriaGroupUpdateSchema = z.object({
 
 export const criteriaCreateSchema = z.object({
   code: z.string().trim().min(1).max(50).transform((value) => value.toUpperCase()),
+  name: z.string().trim().min(1).max(200),
   content: z.string().trim().min(3).max(1000),
   groupId: optionalGroupIdSchema,
   deductionPerError: scoringFieldsSchema.shape.deductionPerError,
@@ -247,6 +249,7 @@ export const criteriaCreateSchema = z.object({
 });
 
 export const criteriaUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
   content: z.string().trim().min(3).max(1000).optional(),
   groupId: optionalGroupIdSchema,
   deductionPerError: scoringFieldsSchema.shape.deductionPerError,

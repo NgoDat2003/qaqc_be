@@ -166,6 +166,7 @@ export function criteriaDto(criteria: any) {
   return {
     id: criteria.id,
     code: criteria.code,
+    name: criteria.name,
     content: criteria.content,
     flag: criteria.flag,
     group: criteria.group
@@ -323,6 +324,7 @@ export function actionPlanDetailDto(actionPlan: any, auditor: any) {
       : null,
     items: actionPlan.items.map((item: any) => ({
       id: item.id,
+      issueCause: item.violation.note,
       rootCause: item.rootCause,
       remediation: item.remediation,
       fixedAt: item.fixedAt,
@@ -476,6 +478,7 @@ export async function calculateAuditScoreFromViolations({
     select: {
       id: true,
       code: true,
+      name: true,
       content: true,
       groupId: true,
       deductionPerError: true,

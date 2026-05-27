@@ -63,6 +63,7 @@ export async function GET(
                       select: {
                         id: true,
                         code: true,
+                        name: true,
                         content: true,
                         flag: true,
                         groupId: true,
@@ -104,6 +105,7 @@ export async function GET(
               select: {
                 id: true,
                 code: true,
+                name: true,
                 content: true,
                 flag: true,
                 groupId: true,

@@ -85,6 +85,7 @@ export type AuditAssignmentSession = any;
 export const globalRiskCriteriaSelect = {
   id: true,
   code: true,
+  name: true,
   content: true,
   groupId: true,
   deductionPerError: true,

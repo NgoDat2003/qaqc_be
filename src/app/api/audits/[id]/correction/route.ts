@@ -70,6 +70,7 @@ export async function PATCH(
                       select: {
                         id: true,
                         code: true,
+                        name: true,
                         content: true,
                         deductionPerError: true,
                         maxDeduction: true,

@@ -1,5 +1,11 @@
 # Maycha QA/QC — Backend
 
+## AI Workflow Boundary
+- Backend nay dung project context toi thieu trong `AGENTS.md` + `.codex/`.
+- ClaudeKit/Codex skills dung ban global da migrate len v2.19; repo nay chi tham chieu global runtime ben ngoai project.
+- Khong copy `.claude/`, `.agents/`, `skills/`, hoac ClaudeKit source folder vao backend.
+- Neu can update skills/agents, update o global ClaudeKit/Codex runtime, khong vendor vao project nay.
+
 ## Stack
 - Framework: Next.js API Routes (REST), TypeScript strict
 - ORM: Prisma + SQLite (dev) / PostgreSQL (prod)

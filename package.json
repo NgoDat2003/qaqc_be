@@ -7,7 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "ts-node -P tsconfig.test.json tests/run-tests.ts"
+    "test": "ts-node -P tsconfig.test.json tests/run-tests.ts",
+    "seed:analytics": "ts-node -O \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed-analytics.ts append",
+    "seed:analytics:reset": "ts-node -O \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed-analytics.ts reset-qaqc-analytics",
+    "seed:analytics:normalize": "ts-node -O \"{\\\"module\\\":\\\"CommonJS\\\"}\" prisma/seed-analytics.ts normalize-master",
+    "benchmark:analytics": "node scripts/benchmark-analytics.mjs"
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"

@@ -61,6 +61,84 @@ Tai lieu nay danh cho FE implement man:
 | `rejected` | Sua lai item, submit lai | Xem | Xem |
 | `closed` | Xem readonly | Xem readonly | Xem readonly |
 
+## E2E Fix Guide - Phase 5/6
+
+Muc nay danh rieng cho 2 phase dang bi ket trong E2E FE.
+
+### Phase 5 - SM Dien Khac Phuc AP
+
+Flow dung:
+
+```txt
+GET /api/action-plans/:id
+-> render danh sach AP items
+-> SM nhap thong tin khac phuc tung item
+-> upload anh neu can
+-> PATCH /api/action-plans/:id
+```
+
+Mapping field tren UI:
+
+| UI | Field BE | Bat buoc khi submit | Ghi chu |
+| --- | --- | --- | --- |
+| Loi goc / mo ta loi QC | `item.issueCause` hoac `item.violation.note` | Khong | Readonly, day la note QC da nhap luc cham audit |
+| Nguyen nhan | `item.rootCause` | Co | FE phai render input nay, neu thieu thi submit bi block |
+| Huong khac phuc | `item.remediation` | Co | Noi dung SM nhap cach sua loi |
+| Ngay da sua | `item.fixedAt` | Co | Gui ISO datetime, vi du `2026-05-19T10:00:00.000Z` |
+| Nguoi thuc hien | `item.assigneeName` | Co | Nhap ten tu do, khong can user trong he thong |
+| Anh khac phuc | `imageIds` khi PATCH, `item.remediationImages` khi GET | Tuy loai loi | Critical/risk/auto CCP bat buoc co anh |
+
+Luu y quan trong:
+
+- `issueCause` la loi goc QC ghi nhan, FE chi hien thi de SM doc.
+- `rootCause` la nguyen nhan khac phuc do SM nhap, FE phai co textarea/input rieng.
+- `fixedAt` la ngay thuc te sua xong, khong phai deadline.
+- Sau khi upload anh, FE lay `image.id` de gui vao `imageIds` trong payload PATCH.
+
+### Phase 6 - SM Submit, QAM Reject/Close AP
+
+Flow dung:
+
+```txt
+SM: POST /api/action-plans/:id/submit
+-> AP status = submitted
+-> QAM review
+-> QAM: POST /api/action-plans/:id/reject
+   hoac POST /api/action-plans/:id/close
+```
+
+Dieu kien UI:
+
+| Action | Role | Status hop le | FE nen lam |
+| --- | --- | --- | --- |
+| Submit AP | `store_manager` | `draft`, `rejected` | Disable neu con item thieu `rootCause/remediation/fixedAt/assigneeName` |
+| Reject AP | `qa_manager` | `submitted` | Bat buoc nhap `reviewNote` |
+| Close AP | `qa_manager` | `submitted` | Hoi confirm truoc khi dong |
+
+Response cua cac mutation AP la minimal. Sau khi submit/reject/close, FE nen refetch:
+
+```txt
+GET /api/action-plans/:id
+```
+
+### Hai Bug FE Can Sua Truoc Khi Retest
+
+| Bug | Nguyen nhan | Cach sua FE |
+| --- | --- | --- |
+| Audit result detail 404 | Link "Xem chi tiet" dang dung `assignmentId` | Dung `audit.id` khi route sang `/audits/:id`; neu row chua co `auditId` thi disable detail hoac mo assignment execution |
+| Nut submit AP luon disabled | FE validate `item.rootCause` nhung AP item card khong co input `rootCause` | Them field "Nguyen nhan" bind vao `item.rootCause`; khong dung `issueCause` lam input |
+
+### Acceptance Checklist Cho FE
+
+- Click "Xem chi tiet" audit result khong con 404.
+- AP detail hien loi goc QC bang `issueCause` hoac `violation.note`.
+- AP item co input rieng cho `rootCause`.
+- SM update AP bang PATCH truoc khi submit.
+- Submit AP chi enable khi moi item co `rootCause`, `remediation`, `fixedAt`, `assigneeName`.
+- Item critical/risk/auto CCP co anh khac phuc truoc khi submit.
+- QAM chi thay nut reject/close khi AP status la `submitted`.
+- Sau moi mutation submit/reject/close, FE refetch AP detail.
+
 ## API Envelope
 
 Moi response di theo format chung:
@@ -147,6 +225,7 @@ type AuditResultDetail = {
     criteria: {
       id: string
       code: string
+      name: string
       content: string
       flag: "none" | "critical" | "risk"
       group: { id: string; code: string; name: string } | null
@@ -451,6 +530,7 @@ type ActionPlanDetail = {
   }
   items: Array<{
     id: string
+    issueCause: string | null
     rootCause: string | null
     remediation: string | null
     fixedAt: string | null
@@ -470,6 +550,8 @@ type ActionPlanDetail = {
   }>
 }
 ```
+
+`issueCause` la mo ta loi goc QC da nhap khi cham audit, alias tu `violation.note` de FE hien thi nhanh tren AP item. `rootCause` van la nguyen nhan khac phuc do SM/QAM nhap trong Action Plan.
 
 ### `PATCH /api/action-plans/:id`
 
@@ -576,6 +658,21 @@ type ImageDto = {
 ```
 
 FE dung `imageIds` de gan anh vao violation hoac AP item.
+
+Luu y render anh:
+
+- `url` tra ve dang `/uploads/evidence/...` la public path cua BE.
+- Neu FE chay khac origin voi BE, vi du FE `localhost:3001` va BE `localhost:3000`, FE phai prefix BE base URL truoc khi render anh.
+- Vi du: `/uploads/evidence/demo-audit-area.svg` can render thanh `http://localhost:3000/uploads/evidence/demo-audit-area.svg`.
+- Khuyen nghi FE co helper chung:
+
+```ts
+const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000"
+
+export function resolveImageUrl(url: string) {
+  return url.startsWith("http") ? url : `${API_ORIGIN}${url}`
+}
+```
 
 ## Notification APIs
 

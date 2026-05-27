@@ -135,7 +135,7 @@ async function main() {
   const createdCriteria = []
   for (const c of criteriaList) {
     const crit = await prisma.criteria.create({
-      data: { code: c.code, groupId: c.group.id, content: c.content, deductionPerError: c.points, maxDeduction: 5, flag: c.flag }
+      data: { code: c.code, groupId: c.group.id, name: c.content, content: c.content, deductionPerError: c.points, maxDeduction: 5, flag: c.flag }
     })
     createdCriteria.push(crit)
   }

@@ -178,6 +178,21 @@ type UploadedImage = {
 
 Sau upload, FE dua `id` vao `imageIds` cua loi tuong ung khi luu draft hoac submit.
 
+Luu y render anh:
+
+- `url` tra ve dang `/uploads/evidence/...` la public path cua BE.
+- Neu FE chay khac origin voi BE, vi du FE `localhost:3001` va BE `localhost:3000`, FE phai prefix BE base URL truoc khi render anh.
+- Vi du: `/uploads/evidence/demo-audit-area.svg` can render thanh `http://localhost:3000/uploads/evidence/demo-audit-area.svg`.
+- Khuyen nghi FE co helper chung:
+
+```ts
+const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000"
+
+export function resolveImageUrl(url: string) {
+  return url.startsWith("http") ? url : `${API_ORIGIN}${url}`
+}
+```
+
 Luu y:
 
 - BE khong tin extension ten file tu client;
