@@ -2,6 +2,7 @@ import assert from "assert/strict";
 import path from "path";
 import Module from "module";
 import { unlink } from "fs/promises";
+import { pathToFileURL } from "url";
 import { prisma } from "../src/lib/prisma";
 import { response } from "../src/lib/api-response";
 import { getRoles, hasRole } from "../src/lib/rbac";
@@ -114,6 +115,112 @@ function auditPlanFixture(overrides: Record<string, unknown> = {}) {
     ],
     ...overrides,
   };
+}
+
+async function importCleanupScript() {
+  const importer = new Function("specifier", "return import(specifier)");
+  return importer(
+    pathToFileURL(path.join(__dirname, "..", "scripts", "cleanup-e2e-portfolio.mjs")).href
+  );
+}
+
+function assertNoEmptyFilters(args: unknown) {
+  if (!args || typeof args !== "object") return;
+  const json = JSON.stringify(args);
+  assert.equal(json.includes('"in":[]'), false, "Prisma filter must not contain in: []");
+  assert.equal(json.includes('"OR":[]'), false, "Prisma filter must not contain OR: []");
+}
+
+function createCleanupPrismaMock(data: {
+  plans?: Array<{ id: string; name: string }>;
+  assignments?: Array<{ id: string; planId: string; auditId: string | null }>;
+  actionPlans?: Array<{ id: string; auditId: string }>;
+  violations?: Array<{ id: string; auditId: string }>;
+  actionPlanItems?: Array<{ id: string; actionPlanId: string; violationId: string }>;
+  evidences?: Array<{
+    id: string;
+    violationId?: string | null;
+    actionPlanId?: string | null;
+    actionPlanItemId?: string | null;
+  }>;
+  notifications?: Array<{ id: string; link: string | null }>;
+  calls?: string[];
+}) {
+  const calls = data.calls ?? [];
+
+  const idIn = (ids: string[] | undefined, id: string) => Array.isArray(ids) && ids.includes(id);
+  const firstIn = (args: any, key: string) => args?.where?.[key]?.in as string[] | undefined;
+  const matchesOr = (args: any, row: Record<string, any>) => {
+    const or = args?.where?.OR;
+    if (!Array.isArray(or)) return false;
+    return or.some((condition: any) =>
+      Object.entries(condition).some(([key, value]: [string, any]) => {
+        if (value?.in) return idIn(value.in, row[key]);
+        if (value?.contains) return String(row[key] ?? "").includes(value.contains);
+        return false;
+      })
+    );
+  };
+
+  const model = <T extends { id: string }>(
+    name: string,
+    rows: T[],
+    filter: (args: any, row: T) => boolean
+  ) => ({
+    findMany: async (args: any = {}) => {
+      assertNoEmptyFilters(args);
+      calls.push(`${name}.findMany`);
+      return rows.filter((row) => filter(args, row));
+    },
+    deleteMany: async (args: any = {}) => {
+      assertNoEmptyFilters(args);
+      calls.push(`${name}.deleteMany:${JSON.stringify(args)}`);
+      const ids = firstIn(args, "id");
+      return { count: ids ? rows.filter((row) => ids.includes(row.id)).length : rows.length };
+    },
+    updateMany: async (args: any = {}) => {
+      assertNoEmptyFilters(args);
+      calls.push(`${name}.updateMany:${JSON.stringify(args)}`);
+      const ids = firstIn(args, "id");
+      return { count: ids ? rows.filter((row) => ids.includes(row.id)).length : rows.length };
+    },
+  });
+
+  const prisma: any = {
+    auditPlan: model("auditPlan", data.plans ?? [], (args, row) =>
+      row.name.startsWith(args?.where?.name?.startsWith ?? "")
+    ),
+    auditAssignment: model("auditAssignment", data.assignments ?? [], (args, row) =>
+      idIn(firstIn(args, "planId"), row.planId)
+    ),
+    actionPlan: model("actionPlan", data.actionPlans ?? [], (args, row) =>
+      idIn(firstIn(args, "auditId"), row.auditId)
+    ),
+    violation: model("violation", data.violations ?? [], (args, row) =>
+      idIn(firstIn(args, "auditId"), row.auditId)
+    ),
+    actionPlanItem: model("actionPlanItem", data.actionPlanItems ?? [], matchesOr),
+    evidence: model("evidence", data.evidences ?? [], matchesOr),
+    notification: model("notification", data.notifications ?? [], matchesOr),
+    auditCorrectionRequest: {
+      deleteMany: async (args: any = {}) => {
+        assertNoEmptyFilters(args);
+        calls.push(`auditCorrectionRequest.deleteMany:${JSON.stringify(args)}`);
+        return { count: 0 };
+      },
+    },
+    groupScore: {
+      deleteMany: async (args: any = {}) => {
+        assertNoEmptyFilters(args);
+        calls.push(`groupScore.deleteMany:${JSON.stringify(args)}`);
+        return { count: 0 };
+      },
+    },
+    audit: model("audit", [], () => false),
+    $transaction: async (callback: any) => callback(prisma),
+  };
+
+  return prisma;
 }
 
 const tests: TestCase[] = [
@@ -3350,6 +3457,258 @@ const tests: TestCase[] = [
 
       assert.equal(result.status, 403);
       assert.equal(body.success, false);
+    },
+  },
+  {
+    name: "e2e cleanup dry-run chi collect va khong mutate database",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const calls: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        calls,
+        plans: [{ id: "plan-1", name: "E2E Portfolio 202605270101" }],
+        assignments: [{ id: "assignment-1", planId: "plan-1", auditId: "audit-1" }],
+        actionPlans: [{ id: "ap-1", auditId: "audit-1" }],
+        violations: [{ id: "violation-1", auditId: "audit-1" }],
+        actionPlanItems: [
+          { id: "ap-item-1", actionPlanId: "ap-1", violationId: "violation-1" },
+        ],
+        evidences: [
+          {
+            id: "img-1",
+            violationId: "violation-1",
+            actionPlanId: null,
+            actionPlanItemId: null,
+          },
+        ],
+        notifications: [{ id: "noti-1", link: "/audits/audit-1" }],
+      });
+
+      const result = await cleanup.runCleanup({
+        prisma: prismaMock,
+        dryRun: true,
+        env: {},
+        logger: () => undefined,
+      });
+
+      assert.equal(result.counts.plans, 1);
+      assert.equal(calls.some((call) => call.includes(".deleteMany")), false);
+      assert.equal(calls.some((call) => call.includes(".updateMany")), false);
+    },
+  },
+  {
+    name: "e2e cleanup delete mode bat buoc co guard truoc khi cham database",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const calls: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        calls,
+        plans: [{ id: "plan-1", name: "E2E Portfolio 202605270101" }],
+      });
+
+      await assert.rejects(
+        () =>
+          cleanup.runCleanup({
+            prisma: prismaMock,
+            dryRun: false,
+            env: {},
+            logger: () => undefined,
+          }),
+        /ALLOW_E2E_CLEANUP/
+      );
+      assert.equal(calls.length, 0);
+    },
+  },
+  {
+    name: "e2e cleanup delete mode chi xoa graph E2E va khong dung master data",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const calls: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        calls,
+        plans: [{ id: "plan-1", name: "E2E Portfolio 202605270101" }],
+        assignments: [{ id: "assignment-1", planId: "plan-1", auditId: "audit-1" }],
+        actionPlans: [{ id: "ap-1", auditId: "audit-1" }],
+        violations: [{ id: "violation-1", auditId: "audit-1" }],
+        actionPlanItems: [
+          { id: "ap-item-1", actionPlanId: "ap-1", violationId: "violation-1" },
+        ],
+        evidences: [
+          {
+            id: "img-1",
+            violationId: "violation-1",
+            actionPlanId: null,
+            actionPlanItemId: null,
+          },
+        ],
+        notifications: [
+          { id: "noti-1", link: "/audits/audit-1" },
+          { id: "noti-2", link: "/action-plans/ap-1" },
+          { id: "noti-keep", link: "/dashboard" },
+        ],
+      });
+
+      await cleanup.runCleanup({
+        prisma: prismaMock,
+        dryRun: false,
+        env: { ALLOW_E2E_CLEANUP: "YES" },
+        logger: () => undefined,
+      });
+
+      const order = calls.filter(
+        (call) => call.includes(".deleteMany") || call.includes(".updateMany")
+      );
+      assert.equal(order[0].startsWith("evidence.deleteMany"), true);
+      assert.equal(
+        order.some((call) => call.startsWith("auditAssignment.updateMany")),
+        true
+      );
+      assert.equal(
+        order.findIndex((call) => call.startsWith("auditAssignment.updateMany")) <
+          order.findIndex((call) => call.startsWith("audit.deleteMany")),
+        true
+      );
+      for (const forbidden of [
+        "user.",
+        "store.",
+        "brand.",
+        "roleAssignment.",
+        "checklistForm.",
+        "criteria.",
+        "criteriaGroup.",
+      ]) {
+        assert.equal(calls.some((call) => call.startsWith(forbidden)), false);
+      }
+    },
+  },
+  {
+    name: "e2e cleanup khong co plan hoac sai prefix la no-op an toan",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const calls: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        calls,
+        plans: [
+          { id: "plan-1", name: "Monthly Audit" },
+          { id: "plan-2", name: "E2EPortfolio 202605270101" },
+          { id: "plan-3", name: "Portfolio E2E 202605270101" },
+        ],
+      });
+
+      const result = await cleanup.runCleanup({
+        prisma: prismaMock,
+        dryRun: false,
+        env: { ALLOW_E2E_CLEANUP: "YES" },
+        logger: () => undefined,
+      });
+
+      assert.equal(result.counts.plans, 0);
+      assert.equal(calls.filter((call) => call.includes(".deleteMany")).length, 0);
+      assert.equal(calls.filter((call) => call.includes(".updateMany")).length, 0);
+    },
+  },
+  {
+    name: "e2e cleanup partial failed flow chi xoa assignment va plan",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const calls: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        calls,
+        plans: [{ id: "plan-1", name: "E2E Portfolio 202605270101" }],
+        assignments: [{ id: "assignment-1", planId: "plan-1", auditId: null }],
+      });
+
+      await cleanup.runCleanup({
+        prisma: prismaMock,
+        dryRun: false,
+        env: { ALLOW_E2E_CLEANUP: "YES" },
+        logger: () => undefined,
+      });
+
+      assert.equal(calls.some((call) => call.startsWith("audit.deleteMany")), false);
+      assert.equal(calls.some((call) => call.startsWith("actionPlan.deleteMany")), false);
+      assert.equal(
+        calls.some((call) => call.startsWith("auditAssignment.deleteMany")),
+        true
+      );
+      assert.equal(calls.some((call) => call.startsWith("auditPlan.deleteMany")), true);
+    },
+  },
+  {
+    name: "e2e cleanup chi xoa attached evidence va notification dung link",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const calls: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        calls,
+        plans: [{ id: "plan-1", name: "E2E Portfolio 202605270101" }],
+        assignments: [{ id: "assignment-1", planId: "plan-1", auditId: "audit-1" }],
+        actionPlans: [{ id: "ap-1", auditId: "audit-1" }],
+        violations: [{ id: "violation-1", auditId: "audit-1" }],
+        actionPlanItems: [
+          { id: "ap-item-1", actionPlanId: "ap-1", violationId: "violation-1" },
+        ],
+        evidences: [
+          {
+            id: "img-attached",
+            violationId: "violation-1",
+            actionPlanId: null,
+            actionPlanItemId: null,
+          },
+          {
+            id: "img-orphan",
+            violationId: null,
+            actionPlanId: null,
+            actionPlanItemId: null,
+          },
+        ],
+        notifications: [
+          { id: "noti-audit", link: "/audits/audit-1" },
+          { id: "noti-ap", link: "/action-plans/ap-1" },
+          { id: "noti-keep", link: "/dashboard" },
+        ],
+      });
+
+      await cleanup.runCleanup({
+        prisma: prismaMock,
+        dryRun: false,
+        env: { ALLOW_E2E_CLEANUP: "YES" },
+        logger: () => undefined,
+      });
+
+      const evidenceDelete = calls.find((call) => call.startsWith("evidence.deleteMany"));
+      const notificationDelete = calls.find((call) =>
+        call.startsWith("notification.deleteMany")
+      );
+      assert.match(evidenceDelete ?? "", /img-attached/);
+      assert.equal((evidenceDelete ?? "").includes("img-orphan"), false);
+      assert.match(notificationDelete ?? "", /noti-audit|noti-ap/);
+      assert.equal((notificationDelete ?? "").includes("noti-keep"), false);
+    },
+  },
+  {
+    name: "e2e cleanup output khong lo database secrets",
+    run: async () => {
+      const cleanup: any = await importCleanupScript();
+      const logs: string[] = [];
+      const prismaMock = createCleanupPrismaMock({
+        plans: [{ id: "plan-1", name: "E2E Portfolio 202605270101" }],
+      });
+
+      await cleanup.runCleanup({
+        prisma: prismaMock,
+        dryRun: true,
+        env: {
+          DATABASE_URL: "postgresql://secret",
+          DIRECT_URL: "postgresql://direct-secret",
+        },
+        logger: (line: string) => logs.push(line),
+      });
+
+      const output = logs.join("\n");
+      assert.equal(output.includes("postgresql://"), false);
+      assert.equal(output.includes("DATABASE_URL"), false);
+      assert.equal(output.includes("DIRECT_URL"), false);
     },
   },
   {

@@ -65,6 +65,125 @@ Tai lieu nay danh cho FE implement man:
 
 Muc nay danh rieng cho 2 phase dang bi ket trong E2E FE.
 
+## E2E Portfolio Cleanup
+
+Golden flow E2E FE phai tao audit plan voi prefix dung chinh xac:
+
+```txt
+E2E Portfolio <timestamp>
+```
+
+Vi du:
+
+```txt
+E2E Portfolio 202605271430
+```
+
+BE cleanup la CLI noi bo, khong co public API reset. FE khong can goi tung API de don data sau test.
+
+Dry-run truoc de xem se xoa gi:
+
+```powershell
+npm.cmd run e2e:cleanup:dry
+```
+
+Run cleanup that:
+
+```powershell
+$env:ALLOW_E2E_CLEANUP="YES"; npm.cmd run e2e:cleanup
+```
+
+Cleanup chi xoa data bat dau tu audit plan prefix tren:
+
+- audit plan, assignments, audits;
+- group scores, violations;
+- action plans, action plan items;
+- evidence da attach vao violation/AP/AP item;
+- notification co link toi audit/AP do.
+
+Cleanup khong xoa:
+
+- users, stores, brands, role assignments;
+- checklist, criteria, criteria groups;
+- analytics/demo data khac;
+- evidence da upload nhung chua attach;
+- file vat ly trong `public/uploads/evidence`.
+
+Khuyen nghi dung trong FE E2E:
+
+- Chay cleanup truoc khi rerun sau mot lan test fail.
+- Chay cleanup truoc khi quay video portfolio final.
+- Khong chay cleanup khi E2E dang chay vi co the xoa data cua flow dang test.
+- Sau video final, neu muon giu ket qua demo thi khong cleanup nua.
+- FE nen assert theo `planName`/record minh tao, khong assert bang tong dashboard global.
+
+Golden flow E2E khong can tao master data moi. Dung user/store/checklist da seed san.
+
+## Golden E2E Seed Mapping
+
+Dung bo data co san nay de FE E2E portfolio chay on dinh. Khong tu do user/store/checklist trong golden flow.
+
+Mat khau demo dang dung cho cac account E2E:
+
+```ts
+export const E2E_PASSWORD = "Test@1234"
+```
+
+Accounts:
+
+| Role | Email | Display | Ghi chu |
+| --- | --- | --- | --- |
+| Admin | `admin@qualityops.com` | Quan Tri He Thong | Dung cho smoke admin neu can |
+| QAM | `ngoclam.le3@gmail.com` | Tran Van An | Tao audit plan, tao/close AP |
+| QC | `gianguyen.7kang28@gmail.com` | Vu Van An | Cham assignment |
+| SM | `store-manager-152@qualityops.demo` | Pham Gia Chi | Cap nhat/submit AP cua store ben duoi |
+| AM | `thanh7ke55@yahoo.com` | Phan Gia An | Scope store ben duoi |
+| Executive | `executive-viewer-1@qualityops.demo` | Do Thanh Nam | Smoke dashboard/read-only neu can |
+
+Store:
+
+| Field | Value |
+| --- | --- |
+| `storeId` | `cmpewvhat011rwdgnmoh5qsfd` |
+| `code` | `CH0001` |
+| `name` | `Bep Trung Tam Ngo Quyen` |
+| `modelType` | `cloud_kitchen` |
+| `province` | `Hai Phong` |
+| `ward` | `Phuong 2` |
+| `brand.code` | `CLOUD` |
+| `brand.name` | `Bep Trung Tam` |
+| `manager.email` | `store-manager-152@qualityops.demo` |
+| `am.email` | `thanh7ke55@yahoo.com` |
+
+Checklist:
+
+| Field | Value |
+| --- | --- |
+| `checklistId` | `cmpccz5ax0025p3fyqqlf1bhj` |
+| `name` | `Checklist van hanh cua hang - Demo` |
+| `version` | `6.0.0` |
+| `status` | `published` |
+| `sectionCount` | `4` |
+
+Golden flow nen giu happy path:
+
+```txt
+QAM tao audit plan E2E Portfolio <timestamp>
+-> QAM publish/giao CH0001 cho QC
+-> QC cham normal + CCP, upload anh loi neu can
+-> QAM xem audit result va tao AP
+-> SM cap nhat rootCause/remediation/fixedAt/assigneeName/images
+-> SM submit AP
+-> QAM close AP
+```
+
+Khong dua vao golden flow dau tien:
+
+- Admin CRUD.
+- Checklist/criteria CRUD.
+- Correction request.
+- Dashboard aggregate global count lam dieu kien pass.
+
 ### Phase 5 - SM Dien Khac Phuc AP
 
 Flow dung:
@@ -662,9 +781,15 @@ FE dung `imageIds` de gan anh vao violation hoac AP item.
 Luu y render anh:
 
 - `url` tra ve dang `/uploads/evidence/...` la public path cua BE.
-- Neu FE chay khac origin voi BE, vi du FE `localhost:3001` va BE `localhost:3000`, FE phai prefix BE base URL truoc khi render anh.
-- Vi du: `/uploads/evidence/demo-audit-area.svg` can render thanh `http://localhost:3000/uploads/evidence/demo-audit-area.svg`.
-- Khuyen nghi FE co helper chung:
+- Neu FE da cau hinh Next rewrite/proxy cho `/uploads/...`, browser nen render relative URL truc tiep. Day la convention khuyen nghi cho demo/mobile vi khong expose `localhost:3000`.
+
+```ts
+export function resolveImageUrl(url: string) {
+  return url.startsWith("http") ? url : url
+}
+```
+
+- Neu FE khong proxy static uploads va chay khac origin voi BE, khi do moi prefix BE origin:
 
 ```ts
 const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3000"
@@ -673,6 +798,8 @@ export function resolveImageUrl(url: string) {
   return url.startsWith("http") ? url : `${API_ORIGIN}${url}`
 }
 ```
+
+API response khong doi; day chi la quy uoc render anh o FE.
 
 ## Notification APIs
 
