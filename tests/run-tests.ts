@@ -1629,7 +1629,7 @@ const tests: TestCase[] = [
                 name: "Plan 1",
                 status: "open",
                 startDate: new Date("2026-05-01"),
-                endDate: new Date("2026-05-30"),
+                endDate: new Date("2026-06-30"),
                 form: { id: "form-1", name: "Checklist", version: "v1" },
               },
             },
@@ -2218,7 +2218,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -2280,7 +2280,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -2360,7 +2360,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -2401,7 +2401,7 @@ const tests: TestCase[] = [
                 name: "Plan 1",
                 status: "open",
                 startDate: new Date("2026-05-01"),
-                endDate: new Date("2026-05-30"),
+                endDate: new Date("2026-06-30"),
                 formId: "form-1",
                 form: {
                   id: "form-1",
@@ -2468,7 +2468,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -2534,7 +2534,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -2647,7 +2647,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -2768,7 +2768,7 @@ const tests: TestCase[] = [
             name: "Plan 1",
             status: "open",
             startDate: new Date("2026-05-01"),
-            endDate: new Date("2026-05-30"),
+            endDate: new Date("2026-06-30"),
             formId: "form-1",
             form: {
               id: "form-1",
@@ -3244,7 +3244,7 @@ const tests: TestCase[] = [
     name: "dashboard AM tra trend 5 thang moi nhat va AP theo store day du",
     run: async () => {
       const oldDeadline = new Date("2026-01-01T00:00:00.000Z");
-      const futureDeadline = new Date("2026-06-01T00:00:00.000Z");
+      const futureDeadline = new Date("2026-06-30T00:00:00.000Z");
       const closedDeadline = new Date("2026-05-20T00:00:00.000Z");
       const createdAt = new Date("2025-12-20T00:00:00.000Z");
       setPrismaModel("roleAssignment", {
